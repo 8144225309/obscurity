@@ -16,7 +16,7 @@ class ObscurityApp(ctk.CTk):
         self.current_chain = None
 
         # Window Setup
-        self.title("Obscurity [Fork-Aware] // Hackathon Build v0.5")
+        self.title("Obscurity [Fork-Aware] // Hackathon Build v0.6")
         self.geometry("1300x850")
 
         # --- MAIN GRID ---
@@ -78,8 +78,11 @@ class ObscurityApp(ctk.CTk):
         
         btn_frame = ctk.CTkFrame(self.frame_chains, fg_color="transparent")
         btn_frame.pack(side="bottom", fill="x", pady=10, padx=10)
+        
         ctk.CTkButton(btn_frame, text="+ New Chain", height=35, command=self.action_new_chain).pack(fill="x", pady=5)
-        ctk.CTkButton(btn_frame, text="⑂ Clone Chain", height=35, fg_color="#2d2d2d", hover_color="#3a3a3a").pack(fill="x")
+        # Added Load Examples Button
+        ctk.CTkButton(btn_frame, text="Load Example Data", height=25, fg_color="#333", hover_color="#444", command=self.action_load_examples).pack(fill="x", pady=(5,0))
+        ctk.CTkButton(btn_frame, text="⑂ Clone Chain", height=35, fg_color="#2d2d2d", hover_color="#3a3a3a").pack(fill="x", pady=(5,0))
 
     def build_blocks_column(self):
         lbl = ctk.CTkLabel(self.frame_blocks, text="BLOCK TIMELINE", font=("Roboto", 12, "bold"), text_color="#aaaaaa")
@@ -132,7 +135,6 @@ class ObscurityApp(ctk.CTk):
         self.tabs.add("Grind Factory")
         self.tabs.add("Network Factory")
 
-        # Payload
         p = self.tabs.tab("Payload Factory")
         ctk.CTkLabel(p, text="Step 1: Construct Block Data", font=("Roboto", 20, "bold")).pack(anchor="w", pady=(10, 20))
         f_ex = ctk.CTkFrame(p, fg_color="transparent")
@@ -147,7 +149,6 @@ class ObscurityApp(ctk.CTk):
         self.lbl_hash_res = ctk.CTkLabel(p, text="Hash: <Pending>", font=("Consolas", 12), text_color="gray")
         self.lbl_hash_res.pack(pady=5)
 
-        # Grind
         g = self.tabs.tab("Grind Factory")
         ctk.CTkLabel(g, text="Step 2: Generate Keys", font=("Roboto", 20, "bold")).pack(anchor="w", pady=(10, 20))
         ctk.CTkLabel(g, text="Target Hash:", anchor="w").pack(fill="x")
@@ -155,7 +156,6 @@ class ObscurityApp(ctk.CTk):
         self.lbl_grind_target.pack(pady=5)
         ctk.CTkButton(g, text="▶ START GRINDER (Simulated)", height=60, fg_color="green", hover_color="darkgreen").pack(fill="x", pady=20)
 
-        # Network
         n = self.tabs.tab("Network Factory")
         ctk.CTkLabel(n, text="Step 3: Broadcast & Verify", font=("Roboto", 20, "bold")).pack(anchor="w", pady=(10, 20))
         f_link = ctk.CTkFrame(n, fg_color="#2b2b2b")
@@ -171,61 +171,38 @@ class ObscurityApp(ctk.CTk):
         f_ver = ctk.CTkFrame(n, fg_color="transparent")
         f_ver.pack(fill="both", expand=True, pady=10)
         ctk.CTkButton(f_ver, text="✅ FETCH & VERIFY ON NODE", height=50, fg_color="#1f538d", hover_color="#3a7ebf", command=self.action_verify).pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(f_ver, text="Verification Log:", anchor="w").pack(fill="x")
         self.txt_ver_log = ctk.CTkTextbox(f_ver, font=("Consolas", 10), height=150)
         self.txt_ver_log.pack(fill="both", expand=True)
-
         return frame
 
     def create_config_view(self, parent):
         frame = ctk.CTkFrame(parent, fg_color="#2b2b2b", corner_radius=10)
         ctk.CTkLabel(frame, text="System Configuration", font=("Roboto", 24, "bold")).pack(pady=20)
-        
         form = ctk.CTkFrame(frame, fg_color="transparent")
         form.pack(pady=10)
-
-        # RPC
         self.entries = {}
         fields = [("RPC Host", "rpc_host"), ("RPC Port", "rpc_port"), ("RPC User", "rpc_user"), ("RPC Pass", "rpc_pass")]
-        
         curr_conf = self.data_manager.load_config()
-
         for i, (label, key) in enumerate(fields):
             ctk.CTkLabel(form, text=label+":").grid(row=i, column=0, sticky="e", padx=10, pady=10)
             e = ctk.CTkEntry(form, width=300)
             e.insert(0, str(curr_conf.get(key, "")))
             e.grid(row=i, column=1, padx=10, pady=10)
             self.entries[key] = e
-        
-        # RESTORED: Data Dir
         ctk.CTkLabel(form, text="Data Dir:").grid(row=4, column=0, sticky="e", padx=10, pady=10)
         e_dir = ctk.CTkEntry(form, width=300)
         e_dir.insert(0, str(curr_conf.get("data_dir", "")))
         e_dir.grid(row=4, column=1, padx=10, pady=10)
         self.entries["data_dir"] = e_dir
 
-        # ZMQ (Greyed Out)
         tk.Label(form, text="--- ZMQ Settings (Scanning) ---", bg="#2b2b2b", fg="gray").grid(row=5, column=1, pady=10)
-        
         ctk.CTkLabel(form, text="ZMQ Host:", text_color="gray").grid(row=6, column=0, sticky="e", padx=10)
-        e_zmq_h = ctk.CTkEntry(form, width=300, text_color="gray")
-        e_zmq_h.insert(0, "127.0.0.1")
-        e_zmq_h.configure(state="disabled") 
-        e_zmq_h.grid(row=6, column=1, padx=10, pady=5)
-
+        e_zmq_h = ctk.CTkEntry(form, width=300, text_color="gray"); e_zmq_h.insert(0, "127.0.0.1"); e_zmq_h.configure(state="disabled"); e_zmq_h.grid(row=6, column=1, padx=10, pady=5)
         ctk.CTkLabel(form, text="ZMQ Port:", text_color="gray").grid(row=7, column=0, sticky="e", padx=10)
-        e_zmq_p = ctk.CTkEntry(form, width=300, text_color="gray")
-        e_zmq_p.insert(0, "28332")
-        e_zmq_p.configure(state="disabled")
-        e_zmq_p.grid(row=7, column=1, padx=10, pady=5)
+        e_zmq_p = ctk.CTkEntry(form, width=300, text_color="gray"); e_zmq_p.insert(0, "28332"); e_zmq_p.configure(state="disabled"); e_zmq_p.grid(row=7, column=1, padx=10, pady=5)
 
-        # Save Button
         ctk.CTkButton(frame, text="Save Config", width=200, height=40, fg_color="#1f538d", command=self.action_save_config).pack(pady=(30, 10))
-        
-        # Test Connection Button
         ctk.CTkButton(frame, text="Test RPC Connection", width=200, height=30, fg_color="transparent", border_width=1, command=self.action_test_connection).pack(pady=10)
-        
         return frame
 
     def create_keystore_view(self, parent):
@@ -235,13 +212,8 @@ class ObscurityApp(ctk.CTk):
         return frame
 
     def show_view(self, view_name):
-        self.view_factories.pack_forget()
-        self.view_config.pack_forget()
-        self.view_keystore.pack_forget()
-        self.btn_cfg.configure(fg_color="#333")
-        self.btn_keys.configure(fg_color="#333")
-        self.btn_work.configure(fg_color="transparent")
-        
+        self.view_factories.pack_forget(); self.view_config.pack_forget(); self.view_keystore.pack_forget()
+        self.btn_cfg.configure(fg_color="#333"); self.btn_keys.configure(fg_color="#333"); self.btn_work.configure(fg_color="transparent")
         if view_name == "factories": self.view_factories.pack(fill="both", expand=True); self.btn_work.configure(fg_color="#1f538d")
         elif view_name == "config": self.view_config.pack(fill="both", expand=True); self.btn_cfg.configure(fg_color="#1f538d")
         elif view_name == "keystore": self.view_keystore.pack(fill="both", expand=True); self.btn_keys.configure(fg_color="#1f538d")
@@ -249,7 +221,25 @@ class ObscurityApp(ctk.CTk):
     # --- ACTIONS ---
     def action_new_chain(self):
         d = ctk.CTkInputDialog(text="Name:", title="New Chain"); name = d.get_input()
-        if name: self.data_manager.create_new_chain(name); self.refresh_chain_list()
+        if name:
+            folder = self.data_manager.create_new_chain(name)
+            self.refresh_chain_list()
+            # AUTO-SELECT LOGIC
+            for item in self.tree_chains.get_children():
+                if self.tree_chains.item(item)['values'][0] == folder:
+                    self.tree_chains.selection_set(item)
+                    self.on_chain_select(None)
+                    break
+    
+    def action_load_examples(self):
+        folder = self.data_manager.create_example_chains()
+        self.refresh_chain_list()
+        # AUTO-SELECT LOGIC for Examples
+        for item in self.tree_chains.get_children():
+            if self.tree_chains.item(item)['values'][0] == folder:
+                self.tree_chains.selection_set(item)
+                self.on_chain_select(None)
+                break
 
     def action_new_block(self):
         if not self.current_chain: return
@@ -290,17 +280,13 @@ class ObscurityApp(ctk.CTk):
         if not sel: return
         txt = self.tree_blocks.item(sel)['values'][1]
         idx = int(txt.split('_')[0])
-        
         block_data = self.data_manager.update_block_status(self.current_chain, idx)
         expected = block_data['block_hash']
-        
         self.txt_ver_log.insert("end", f"Verifying {expected} against {txid}...\n")
         self.txt_ver_log.see("end")
-        
         success, log = self.data_manager.verify_on_chain(txid, expected)
         self.txt_ver_log.insert("end", log + "\n----------------\n")
         self.txt_ver_log.see("end")
-        
         if success:
             self.data_manager.update_block_status(self.current_chain, idx, status="verified")
             self.load_chain_blocks(self.current_chain)
@@ -312,10 +298,8 @@ class ObscurityApp(ctk.CTk):
     def action_test_connection(self):
         self.action_save_config()
         success, msg = self.data_manager.test_rpc_connection()
-        if success:
-            tk.messagebox.showinfo("Success", msg)
-        else:
-            tk.messagebox.showerror("Connection Failed", msg)
+        if success: tk.messagebox.showinfo("Success", msg)
+        else: tk.messagebox.showerror("Connection Failed", msg)
 
     # --- LIST LOGIC ---
     def refresh_chain_list(self):
