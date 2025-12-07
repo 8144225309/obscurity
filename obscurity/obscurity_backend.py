@@ -8,6 +8,8 @@ import secrets
 import math
 import shutil
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 
 # --- INTEGRATION: IMPORT THE NEW MINER API ---
 try:
@@ -92,11 +94,12 @@ class DataManager:
         except Exception as e:
             return False, str(e), 0
 
-    # --- ENCRYPTION ENGINE (AES-256-GCM) ---
+    # --- CRYPTO PRIMITIVES ---
     def _derive_key(self, password_str):
         return hashlib.sha256(password_str.encode()).digest()
 
-    def encrypt_data(self, password, raw_bytes):
+    # MODE 1: AES-GCM (For Text - Includes Auth Tag Overhead)
+    def encrypt_data_gcm(self, password, raw_bytes):
         key = self._derive_key(password)
         aesgcm = AESGCM(key)
         nonce = secrets.token_bytes(12) 
@@ -105,7 +108,7 @@ class DataManager:
         ciphertext = ciphertext_with_tag[:-16]
         return ciphertext.hex(), nonce.hex(), tag.hex()
 
-    def decrypt_data(self, password, ciphertext_hex, nonce_hex, tag_hex):
+    def decrypt_data_gcm(self, password, ciphertext_hex, nonce_hex, tag_hex):
         try:
             key = self._derive_key(password)
             aesgcm = AESGCM(key)
@@ -115,7 +118,27 @@ class DataManager:
             data = aesgcm.decrypt(nonce, ciphertext + tag, None)
             return data
         except Exception as e:
-            print(f"Decryption failed: {e}")
+            return None
+
+    # MODE 2: AES-CTR (For Hashes - Zero Overhead, Exact 32 Bytes)
+    def encrypt_data_ctr(self, password, raw_bytes):
+        key = self._derive_key(password)
+        nonce = secrets.token_bytes(16)
+        cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(raw_bytes) + encryptor.finalize()
+        return ciphertext.hex(), nonce.hex(), "" # No Tag in CTR
+
+    def decrypt_data_ctr(self, password, ciphertext_hex, nonce_hex):
+        try:
+            key = self._derive_key(password)
+            nonce = bytes.fromhex(nonce_hex)
+            cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
+            decryptor = cipher.decryptor()
+            ciphertext = bytes.fromhex(ciphertext_hex)
+            data = decryptor.update(ciphertext) + decryptor.finalize()
+            return data
+        except Exception as e:
             return None
 
     # --- ANCHOR & FORK MANAGEMENT ---
@@ -174,38 +197,48 @@ class DataManager:
                 with open(os.path.join(blocks_dir, fname), "r") as f: data.append(json.load(f))
         return data
 
-    # --- BLOCK FACTORY (CORRECTED: RAW BINARY HASH) ---
-    def commit_block(self, chain_folder, index, prev_hash, data_bytes, filename="data.bin"):
+    # --- BLOCK FACTORY: DUAL PROTOCOL IMPLEMENTATION ---
+    def commit_block(self, chain_folder, index, prev_hash, data_bytes, filename="msg.txt"):
         chain_id = chain_folder.split('_')[-1]
         
-        # 1. Calculate Content Hash (HEX for Metadata, BINARY for Payload)
-        content_hash_hex = hashlib.sha256(data_bytes).hexdigest()
-        content_hash_bin = hashlib.sha256(data_bytes).digest() # 32 Bytes Raw
-        
-        # 2. Determine Payload
-        is_file_mode = len(data_bytes) > 500 or filename != "msg.txt"
+        # 1. Determine Protocol Mode
+        is_file_mode = filename != "msg.txt"
         
         payload_to_encrypt = b""
         local_file_path = None
+        content_hash_hex = hashlib.sha256(data_bytes).hexdigest()
         
+        # Variables for result
+        cipher_hex = ""
+        nonce_hex = ""
+        tag_hex = ""
+        algo_used = ""
+        payload_type = ""
+
         if is_file_mode:
-            # SAVE RAW FILE LOCALLY
+            # --- PROTOCOL B: FILE ANCHOR (AES-CTR / Pure 32) ---
+            # Save raw file locally
             saved_filename = f"{index:05d}_{filename}"
             local_file_path = os.path.join(CHAINS_DIR, chain_folder, "blocks", saved_filename)
             with open(local_file_path, "wb") as f:
                 f.write(data_bytes)
-                
-            # ENCRYPT RAW BINARY HASH (32 BYTES)
-            # This ensures exactly 8 keys at 32-bit density (32 bytes / 4 bytes = 8)
-            payload_to_encrypt = content_hash_bin
+            
+            # Encrypt RAW BINARY HASH (32 Bytes) using AES-CTR
+            # Result: Exact 32 Bytes Output (Perfect for 8 Keys)
+            payload_to_encrypt = hashlib.sha256(data_bytes).digest() 
+            cipher_hex, nonce_hex, _ = self.encrypt_data_ctr(chain_id, payload_to_encrypt)
+            algo_used = "AES-256-CTR"
+            payload_type = "hash_bin_32bytes"
+            
         else:
-            # ENCRYPT RAW TEXT
+            # --- PROTOCOL A: TEXT MESSAGE (AES-GCM / Integrity) ---
+            # Encrypt raw text using GCM (Adds 16 bytes overhead for Tag)
             payload_to_encrypt = data_bytes
+            cipher_hex, nonce_hex, tag_hex = self.encrypt_data_gcm(chain_id, payload_to_encrypt)
+            algo_used = "AES-256-GCM"
+            payload_type = "full_content"
 
-        # 3. Encrypt
-        cipher_hex, nonce_hex, tag_hex = self.encrypt_data(chain_id, payload_to_encrypt)
-        
-        # 4. Header Hash
+        # 3. Create Block Header
         hasher = hashlib.sha256()
         hasher.update(str(index).encode())
         hasher.update(str(prev_hash).encode())
@@ -213,6 +246,7 @@ class DataManager:
         block_hash = hasher.hexdigest()
 
         is_anchor = (index == 0)
+        
         block_data = {
             "header": {
                 "index": index,
@@ -228,15 +262,15 @@ class DataManager:
                 "original_filename": filename,
                 "local_storage_path": os.path.basename(local_file_path) if local_file_path else None,
                 "size_bytes": len(data_bytes),
-                "content_hash_sha256": content_hash_hex, # Store Hex for readability in JSON
-                "preview": data_bytes.decode('utf-8', errors='ignore') if not is_file_mode else f"[RAW HASH PAYLOAD] {content_hash_hex}"
+                "content_hash_sha256": content_hash_hex,
+                "preview": data_bytes.decode('utf-8', errors='ignore') if not is_file_mode else f"[BINARY HASH MODE] {content_hash_hex}"
             },
             "encryption": {
-                "algo": "AES-256-GCM",
-                "payload_type": "hash_bin_32bytes" if is_file_mode else "full_content",
+                "algo": algo_used,
+                "payload_type": payload_type,
                 "ciphertext_hex": cipher_hex,
                 "nonce_hex": nonce_hex,
-                "tag_hex": tag_hex,
+                "tag_hex": tag_hex, # Empty for CTR
                 "key_used": chain_id
             },
             "steganography": {
@@ -254,10 +288,6 @@ class DataManager:
 
     # --- GRINDER EXECUTION ---
     def run_grinder(self, chain_folder, block_index, difficulty_bits, num_workers, progress_callback):
-        """
-        Grinds keys and generates the .lockbox artifact.
-        Now accepts 'num_workers' to tune 4090 usage.
-        """
         if not self.miner_available:
             return False, "Miner binary missing."
 
@@ -282,15 +312,10 @@ class DataManager:
         total_keys = math.ceil(len(full_payload) / chunk_bytes)
         
         def api_callback(msg_type, data):
-            if msg_type == "success" and progress_callback:
-                idx = data['index'] + 1
-                gps_fmt = f"{data['gps']/1_000_000:.1f}M/s"
-                msg = f"Key {idx}/{total_keys} (Worker {data['worker']} @ {gps_fmt})"
-                progress_callback(idx, total_keys, msg)
-            elif msg_type == "error":
-                print(f"[API Error] {data}")
+            if progress_callback:
+                progress_callback(msg_type, data, total_keys)
 
-        # UPDATE MINER SETTINGS DYNAMICALLY
+        # Update miner settings
         self.miner.num_workers = num_workers
         self.miner.difficulty_bits = difficulty_bits
         self.miner.chunk_bytes = chunk_bytes
@@ -310,6 +335,7 @@ class DataManager:
             with open(os.path.join(blocks_dir, target_fname), "w") as f:
                 json.dump(target_block, f, indent=4)
 
+            # Lockbox logic ...
             lockbox = {
                 "version": 1,
                 "chain_id": chain_folder.split('_')[-1],
@@ -327,12 +353,8 @@ class DataManager:
         except Exception as e:
             return False, f"Grinder Exception: {str(e)}"
 
-    # --- WATCHLIST: PERSISTENCE LAYER ---
+    # --- WATCHLIST & AUTO SCAN ---
     def get_pending_broadcasts(self):
-        """
-        Scans all local chains for blocks that are 'ready_to_link' but not 'verified'.
-        Used to populate the Auto-Scan Watchlist.
-        """
         pending_list = []
         if not os.path.exists(CHAINS_DIR): return []
 
@@ -345,8 +367,6 @@ class DataManager:
                     try:
                         with open(os.path.join(blocks_dir, fname), "r") as f:
                             blk = json.load(f)
-                            
-                        # CRITERIA: Has been ground (keys exist) but not verified on-chain
                         if blk['header']['status'] == "ready_to_link":
                             keys = blk.get('steganography', {}).get('keys', [])
                             if keys:
@@ -354,91 +374,61 @@ class DataManager:
                                     "chain_folder": chain_folder,
                                     "block_index": blk['header']['index'],
                                     "block_hash": blk['header']['block_hash'],
-                                    "first_key": keys[0], # We scan for the first key to identify the TX
+                                    "first_key": keys[0], 
                                     "filename": fname,
                                     "iv": blk['encryption']['nonce_hex'],
                                     "pw": blk['encryption']['key_used'],
-                                    "diff": blk['steganography'].get('difficulty_bits', 32)
+                                    "diff": blk['steganography'].get('difficulty_bits', 32),
+                                    "algo": blk['encryption'].get('algo', 'AES-256-GCM'),
+                                    "tag": blk['encryption'].get('tag_hex', '')
                                 })
                     except: continue
         return pending_list
 
-    # --- AUTOMATION: AUTO-SCAN ENGINE ---
     def auto_scan_network(self, lookback=3):
-        """
-        1. Fetch last N blocks.
-        2. Get all 'pending' local blocks.
-        3. Match TX output keys against pending first_keys.
-        4. If match, Verify + Update Status.
-        """
-        # 1. Get Pending
         pending = self.get_pending_broadcasts()
-        if not pending: return [] # Nothing to look for
+        if not pending: return []
 
-        # 2. Get Recent Blocks
         try:
             tip_hash = self.rpc_call("getbestblockhash")['result']
-            # We will just traverse backwards via 'previousblockhash' manually or getblock(height)
-            # Simpler: Get height, then loop indices
             tip_info = self.rpc_call("getblock", [tip_hash, 1])['result']
             tip_height = tip_info['height']
-        except:
-            return [] # Node error
+        except: return []
 
         found_updates = []
+        target_map = { p['first_key'] : p for p in pending }
 
-        # Scan loop
         for h in range(tip_height, tip_height - lookback, -1):
             blk_data = self.rpc_call("getblockhash", [h])
             if 'error' in blk_data and blk_data['error']: continue
-            
-            blk_hash = blk_data['result']
-            # Verbosity 2 gives us full TX details
-            full_blk = self.rpc_call("getblock", [blk_hash, 2])
+            full_blk = self.rpc_call("getblock", [blk_data['result'], 2])
             if 'result' not in full_blk: continue
             
-            txs = full_blk['result']['tx'] # List of full TX objects
-
-            # Optimization: Create a set of target keys for O(1) lookup
-            # Map { target_pubkey : pending_obj }
-            target_map = { p['first_key'] : p for p in pending }
-
-            for tx in txs:
+            for tx in full_blk['result']['tx']:
                 txid = tx['txid']
-                # Check outputs for P2PK matches
                 for vout in tx['vout']:
                     spk = vout['scriptPubKey'].get('hex', '')
-                    # Quick check: is it P2PK? (starts 21... ends ac, len 70)
                     if len(spk) == 70 and spk.startswith("21") and spk.endswith("ac"):
                         pubkey_in_tx = spk[2:68]
-                        
-                        # MATCH CHECK
                         if pubkey_in_tx in target_map:
-                            # WE FOUND A CANDIDATE!
                             match_obj = target_map[pubkey_in_tx]
-                            
-                            # Verify fully (decrypt whole payload)
                             success, msg = self.verify_transaction_strict(
-                                txid, match_obj['pw'], match_obj['iv'], match_obj['iv'], match_obj['diff']
+                                txid, match_obj['pw'], match_obj['iv'], match_obj['tag'], match_obj['diff'], match_obj['algo']
                             )
-
                             if success:
                                 self._mark_block_verified(match_obj['chain_folder'], match_obj['filename'], txid)
                                 found_updates.append(f"VERIFIED: Block {match_obj['block_index']} in Tx {txid[:8]}")
-        
         return found_updates
 
     def _mark_block_verified(self, chain_folder, filename, txid):
         path = os.path.join(CHAINS_DIR, chain_folder, "blocks", filename)
         if os.path.exists(path):
             with open(path, 'r') as f: blk = json.load(f)
-            
             blk['header']['status'] = "verified"
             blk['header']['txid'] = txid
-            
             with open(path, 'w') as f: json.dump(blk, f, indent=4)
 
-    # --- BITCOIN RPC & VERIFICATION (REAL) ---
+    # --- BITCOIN RPC ---
     def get_auth(self):
         user = self.config.get('rpc_user', '')
         passwd = self.config.get('rpc_pass', '')
@@ -451,7 +441,8 @@ class DataManager:
             return requests.post(url, data=json.dumps(payload), headers={'content-type': 'application/json'}, auth=self.get_auth(), timeout=5).json()
         except Exception as e: return {"error": str(e)}
 
-    def verify_transaction_strict(self, txid, password, iv_hex, salt_tag_hex, difficulty_bits):
+    # --- VERIFICATION (PROTOCOL AWARE) ---
+    def verify_transaction_strict(self, txid, password, iv_hex, tag_hex, difficulty_bits, algo="AES-256-GCM"):
         res = self.rpc_call("getrawtransaction", [txid, True])
         if res.get('error'): return False, f"RPC Error: {res['error']}"
         tx = res.get('result')
@@ -470,9 +461,13 @@ class DataManager:
                 logs.append(f"Out #{vout['n']}: {payload_chunk}")
 
         if not reconstructed_cipher: return False, "No P2PK outputs found."
-
-        logs.append(f"Reconstructed {len(reconstructed_cipher)} bytes.")
-        decrypted_data = self.decrypt_data(password, reconstructed_cipher.hex(), iv_hex, salt_tag_hex)
+        
+        # Dual Protocol Decryption
+        decrypted_data = None
+        if algo == "AES-256-CTR":
+             decrypted_data = self.decrypt_data_ctr(password, reconstructed_cipher.hex(), iv_hex)
+        else:
+             decrypted_data = self.decrypt_data_gcm(password, reconstructed_cipher.hex(), iv_hex, tag_hex)
 
         if decrypted_data:
             return True, "\n".join(logs) + "\n\n[SUCCESS] DECRYPTION CONFIRMED.\nThe data on the blockchain matches your keys exactly."

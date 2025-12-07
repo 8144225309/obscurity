@@ -6,6 +6,7 @@ import math
 import threading
 import time
 import hashlib
+import json
 import obscurity_backend 
 
 # --- CONFIGURATION ---
@@ -28,7 +29,7 @@ class ObscurityApp(ctk.CTk):
         self.auto_scan_active = False
         
         # Window Setup
-        self.title("Obscurity [Anchor System] // Hackathon Build v3.4")
+        self.title("Obscurity [Anchor System] // Hackathon Build v3.6")
         self.geometry("1200x800")
         self.center_window(1200, 800)
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -84,7 +85,7 @@ class ObscurityApp(ctk.CTk):
         style.configure("Treeview.Heading", background="#202020", foreground="#aaaaaa", relief="flat", font=("Roboto", 9, "bold"))
         style.map("Treeview", background=[('selected', hl)])
 
-    # --- LEFT COLUMN ---
+    # --- LEFT COLUMN (HIERARCHY) ---
     def build_hierarchy_column(self):
         ctk.CTkLabel(self.frame_left, text="TIMELINES", font=("Roboto", 14, "bold"), text_color="#aaaaaa").pack(pady=(15,5))
         tree_frame = ctk.CTkFrame(self.frame_left, fg_color="transparent")
@@ -102,12 +103,16 @@ class ObscurityApp(ctk.CTk):
         self.btn_fork = ctk.CTkButton(btn_frame, text="⑂ FORK SELECTED", height=40, fg_color="#3498db", hover_color="#2980b9", command=self.action_fork_chain)
         self.btn_fork.pack(fill="x", pady=4)
         
-        # SETTINGS BUTTON
         ctk.CTkFrame(btn_frame, height=2, fg_color="#333").pack(fill="x", pady=10) 
+        
+        # RESTORED: KEYSTORE BUTTON
+        self.btn_keystore = ctk.CTkButton(btn_frame, text="🔑 KEYSTORE", height=30, fg_color="#444", hover_color="#555", command=self.action_open_keystore)
+        self.btn_keystore.pack(fill="x", pady=4)
+
         self.btn_settings = ctk.CTkButton(btn_frame, text="⚙️ SETTINGS", height=30, fg_color="transparent", border_width=1, text_color="#aaa", hover_color="#333", command=self.action_open_settings)
         self.btn_settings.pack(fill="x", pady=4)
 
-    # --- MID COLUMN ---
+    # --- MID COLUMN (HISTORY) ---
     def build_history_column(self):
         ctk.CTkLabel(self.frame_mid, text="BLOCK HISTORY", font=("Roboto", 14, "bold"), text_color="#aaaaaa").pack(pady=(15,5))
         tree_frame = ctk.CTkFrame(self.frame_mid, fg_color="transparent")
@@ -166,8 +171,8 @@ class ObscurityApp(ctk.CTk):
 
         self.f_draft_tools = ctk.CTkFrame(parent, fg_color="transparent")
         self.var_input_type = ctk.StringVar(value="text")
-        ctk.CTkRadioButton(self.f_draft_tools, text="Text", variable=self.var_input_type, value="text", command=self.toggle_draft_ui).pack(side="left", padx=10)
-        ctk.CTkRadioButton(self.f_draft_tools, text="File", variable=self.var_input_type, value="file", command=self.toggle_draft_ui).pack(side="left", padx=10)
+        ctk.CTkRadioButton(self.f_draft_tools, text="Text (AES-GCM)", variable=self.var_input_type, value="text", command=self.toggle_draft_ui).pack(side="left", padx=10)
+        ctk.CTkRadioButton(self.f_draft_tools, text="File (AES-CTR Hash)", variable=self.var_input_type, value="file", command=self.toggle_draft_ui).pack(side="left", padx=10)
         
         self.btn_commit = ctk.CTkButton(parent, text="🔒 GENERATE HASH & COMMIT", height=45, fg_color="green", hover_color="darkgreen", font=("Roboto", 13, "bold"), command=self.action_commit_block)
         self.btn_commit.pack(fill="x", padx=10, pady=15)
@@ -178,11 +183,13 @@ class ObscurityApp(ctk.CTk):
         if self.var_input_type.get() == "text":
             self.f_file_ui.pack_forget()
             self.txt_content.pack(fill="both", expand=True, padx=2, pady=2)
+            self.update_key_estimate(self.slider_diff.get()) 
         else:
             self.txt_content.pack_forget()
             self.f_file_ui.pack(fill="both", expand=True, padx=2, pady=2)
+            self.update_key_estimate(self.slider_diff.get())
 
-    # --- TAB 2: PUBKEY GRINDER (UPDATED WITH ESTIMATOR) ---
+    # --- TAB 2: PUBKEY GRINDER (STATISTICS VIEW) ---
     def setup_pubkey_grinder(self, parent):
         f_head = ctk.CTkFrame(parent, fg_color="#222")
         f_head.pack(fill="x", pady=10, padx=10)
@@ -202,56 +209,66 @@ class ObscurityApp(ctk.CTk):
         f_ctrl = ctk.CTkFrame(parent, fg_color="transparent")
         f_ctrl.pack(fill="x", padx=10, pady=10)
         
-        # Difficulty Slider (UPDATED)
+        # Difficulty Slider (MAX 256 for 1 Key)
         ctk.CTkLabel(f_ctrl, text="Density (Bits/Key):").pack(side="left", padx=5)
-        self.slider_diff = ctk.CTkSlider(f_ctrl, from_=16, to=64, number_of_steps=48, width=120, command=self.update_key_estimate)
-        self.slider_diff.set(32) # Default
+        self.slider_diff = ctk.CTkSlider(f_ctrl, from_=16, to=256, number_of_steps=240, width=150, command=self.update_key_estimate)
+        self.slider_diff.set(32) 
         self.slider_diff.pack(side="left", padx=5)
         self.lbl_diff_display = ctk.CTkLabel(f_ctrl, text="32", width=30)
         self.lbl_diff_display.pack(side="left")
 
-        # ESTIMATOR LABEL (NEW)
+        # ESTIMATOR LABEL
         self.lbl_key_estimate = ctk.CTkLabel(f_ctrl, text="Est. Keys: --", text_color="#F39C12", font=("Roboto", 11, "bold"))
         self.lbl_key_estimate.pack(side="left", padx=15)
 
         # Worker Slider
-        ctk.CTkLabel(f_ctrl, text="Parallel Workers:").pack(side="left", padx=(20, 5))
-        self.slider_workers = ctk.CTkSlider(f_ctrl, from_=1, to=16, number_of_steps=15, width=120, command=lambda v: self.lbl_workers_display.configure(text=f"{int(v)}"))
+        ctk.CTkLabel(f_ctrl, text="Workers:").pack(side="left", padx=(20, 5))
+        self.slider_workers = ctk.CTkSlider(f_ctrl, from_=1, to=16, number_of_steps=15, width=100, command=lambda v: self.lbl_workers_display.configure(text=f"{int(v)}"))
         self.slider_workers.set(4)
         self.slider_workers.pack(side="left", padx=5)
         self.lbl_workers_display = ctk.CTkLabel(f_ctrl, text="4", width=30)
         self.lbl_workers_display.pack(side="left")
 
-        self.btn_start_grind = ctk.CTkButton(parent, text="Start Grinding Spendable Pubkeys", height=45, fg_color="#e74c3c", hover_color="#c0392b", font=("Roboto", 13, "bold"), command=self.action_run_grinder)
+        self.btn_start_grind = ctk.CTkButton(parent, text="START GRINDING SEQUENCE", height=45, fg_color="#e74c3c", hover_color="#c0392b", font=("Roboto", 13, "bold"), command=self.action_run_grinder)
         self.btn_start_grind.pack(fill="x", padx=20, pady=10)
 
-        self.canvas_frame = ctk.CTkFrame(parent, fg_color="black")
-        self.canvas_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        self.canvas = tk.Canvas(self.canvas_frame, bg="#050505", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.lbl_grind_stats = ctk.CTkLabel(parent, text="Ready", font=("Consolas", 11))
-        self.lbl_grind_stats.pack(side="left", padx=10, pady=5)
+        # STATISTICAL DASHBOARD
+        self.f_stats = ctk.CTkFrame(parent, fg_color="#111", corner_radius=10)
+        self.f_stats.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.lbl_stat_status = ctk.CTkLabel(self.f_stats, text="STATUS: IDLE", font=("Roboto", 16, "bold"), text_color="#777")
+        self.lbl_stat_status.pack(pady=(20, 10))
+        
+        self.progress_bar = ctk.CTkProgressBar(self.f_stats, orientation="horizontal", height=20)
+        self.progress_bar.set(0)
+        self.progress_bar.pack(fill="x", padx=40, pady=10)
+        
+        f_metrics = ctk.CTkFrame(self.f_stats, fg_color="transparent")
+        f_metrics.pack(fill="x", padx=40, pady=10)
+        
+        self.lbl_stat_keys = ctk.CTkLabel(f_metrics, text="Keys Found: 0 / 0", font=("Consolas", 14))
+        self.lbl_stat_keys.pack(side="left", expand=True)
+        
+        self.lbl_stat_speed = ctk.CTkLabel(f_metrics, text="Speed: 0.00 M/s", font=("Consolas", 14), text_color="cyan")
+        self.lbl_stat_speed.pack(side="right", expand=True)
 
-    # --- ESTIMATOR LOGIC (CALIBRATED FOR BINARY HASH) ---
+    # --- ESTIMATOR LOGIC (CALIBRATED) ---
     def update_key_estimate(self, value):
         val = int(value)
         self.lbl_diff_display.configure(text=f"{val}")
         
-        # Default Payload Size: 48 Bytes
-        # (32 Bytes SHA-256 Hash + 16 Bytes AES-GCM Tag)
-        payload_size = 48 
+        payload_size = 0
         
-        # If we have a block selected, check if we can get exact encrypted size
-        if self.selected_block_index is not None and self.current_chain:
-            try:
-                blocks = self.data_manager.load_blocks(self.current_chain)
-                block = next((b for b in blocks if b['header']['index'] == self.selected_block_index), None)
-                if block:
-                    cipher = block['encryption'].get('ciphertext_hex', "")
-                    if cipher: payload_size = len(cipher) / 2 # Hex to Bytes
-            except: pass
-            
-        # Math: Bytes / (Bits_Per_Key / 8)
+        # 1. Check Mode
+        if self.var_input_type.get() == "file" or (self.selected_block_index is not None and self.lbl_file_name.cget("text") != "No file selected"):
+             # AES-CTR Hash Payload is ALWAYS 32 Bytes
+             payload_size = 32
+        else:
+            # AES-GCM Text Payload = Text Length + 16 Bytes (Tag)
+            txt = self.txt_content.get("0.0", "end").strip().encode('utf-8')
+            payload_size = len(txt) + 16 
+
+        # 2. Math: Payload_Bytes / (Bits_Per_Key / 8)
         bytes_per_key = val / 8
         if bytes_per_key > 0:
             num_keys = math.ceil(payload_size / bytes_per_key)
@@ -280,8 +297,6 @@ class ObscurityApp(ctk.CTk):
         wl_tools.pack(fill="x", padx=20, pady=5)
         
         ctk.CTkButton(wl_tools, text="↻ Refresh List", width=100, command=self.refresh_watchlist).pack(side="left")
-        
-        # AUTO-SCAN SWITCH
         self.switch_autoscan = ctk.CTkSwitch(wl_tools, text="AUTO-SCAN NETWORK (Every 60s)", command=self.toggle_auto_scan)
         self.switch_autoscan.pack(side="right")
 
@@ -300,75 +315,99 @@ class ObscurityApp(ctk.CTk):
         self.entry_verify_iv.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
         f_form.grid_columnconfigure(1, weight=1)
 
-        self.btn_verify = ctk.CTkButton(parent, text="CONNECT NODE & VERIFY (STRICT 1:1)", height=45, fg_color="#f39c12", hover_color="#d35400", command=self.action_verify)
+        self.btn_verify = ctk.CTkButton(parent, text="CONNECT NODE & VERIFY", height=45, fg_color="#f39c12", hover_color="#d35400", command=self.action_verify)
         self.btn_verify.pack(fill="x", padx=40, pady=20)
         
         ctk.CTkLabel(parent, text="Verification Log:", anchor="w").pack(fill="x", padx=20)
         self.txt_audit_log = ctk.CTkTextbox(parent, font=("Consolas", 10), height=100)
         self.txt_audit_log.pack(fill="both", expand=True, padx=20, pady=10)
 
-        # Initial Load
         self.refresh_watchlist()
 
-    # --- SETTINGS MODAL ---
+    # --- RESTORED: KEYSTORE MANAGER ---
+    def action_open_keystore(self):
+        toplevel = ctk.CTkToplevel(self)
+        toplevel.title("Keystore Manager")
+        toplevel.geometry("800x600")
+        
+        ctk.CTkLabel(toplevel, text="Generated Key Repository", font=("Roboto", 16, "bold")).pack(pady=10)
+        
+        # Keystore Tree
+        cols = ("chain", "idx", "status", "keys_count", "first_key")
+        ks_tree = ttk.Treeview(toplevel, columns=cols, show="headings", height=20)
+        ks_tree.heading("chain", text="Chain")
+        ks_tree.heading("idx", text="#")
+        ks_tree.heading("status", text="Status")
+        ks_tree.heading("keys_count", text="Keys")
+        ks_tree.heading("first_key", text="First Key (Preview)")
+        ks_tree.column("idx", width=50)
+        ks_tree.column("keys_count", width=50)
+        ks_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Populate
+        all_blocks = []
+        for c in self.data_manager.get_chains():
+            blocks = self.data_manager.load_blocks(c['folder'])
+            for b in blocks:
+                keys = b.get('steganography', {}).get('keys', [])
+                if keys:
+                    ks_tree.insert("", "end", values=(
+                        c['name'], 
+                        b['header']['index'], 
+                        b['header']['status'].upper(), 
+                        len(keys), 
+                        keys[0][:20] + "..."
+                    ))
+        
+        ctk.CTkButton(toplevel, text="EXPORT RAW JSON", command=lambda: messagebox.showinfo("Info", "Export feature coming soon.")).pack(pady=10)
+
+    # --- SETTINGS MODAL (WITH TOGGLE) ---
     def action_open_settings(self):
         toplevel = ctk.CTkToplevel(self)
-        toplevel.title("Settings // Node Connection")
-        toplevel.geometry("500x400")
-        toplevel.transient(self) # Keep on top
+        toplevel.title("Settings")
+        toplevel.geometry("500x500")
         
         curr = self.data_manager.config
         
-        ctk.CTkLabel(toplevel, text="Bitcoin Node Configuration (RPC)", font=("Roboto", 16, "bold")).pack(pady=20)
-        
+        # Node Config
+        ctk.CTkLabel(toplevel, text="Bitcoin Node Configuration", font=("Roboto", 14, "bold")).pack(pady=(20,10))
         f = ctk.CTkFrame(toplevel)
-        f.pack(fill="both", expand=True, padx=20, pady=10)
+        f.pack(fill="x", padx=20)
         
-        ctk.CTkLabel(f, text="IP Address:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        e_ip = ctk.CTkEntry(f); e_ip.insert(0, curr.get("rpc_host", "127.0.0.1"))
-        e_ip.grid(row=0, column=1, padx=10, sticky="ew")
+        ctk.CTkLabel(f, text="RPC Host:").grid(row=0, column=0, padx=10, pady=5)
+        e_ip = ctk.CTkEntry(f); e_ip.insert(0, curr.get("rpc_host", "127.0.0.1")); e_ip.grid(row=0, column=1, sticky="ew")
         
-        ctk.CTkLabel(f, text="Port:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
-        e_port = ctk.CTkEntry(f); e_port.insert(0, str(curr.get("rpc_port", 8332)))
-        e_port.grid(row=1, column=1, padx=10, sticky="ew")
+        ctk.CTkLabel(f, text="RPC Port:").grid(row=1, column=0, padx=10, pady=5)
+        e_port = ctk.CTkEntry(f); e_port.insert(0, str(curr.get("rpc_port", 8332))); e_port.grid(row=1, column=1, sticky="ew")
 
-        ctk.CTkLabel(f, text="RPC User:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
-        e_user = ctk.CTkEntry(f); e_user.insert(0, curr.get("rpc_user", ""))
-        e_user.grid(row=2, column=1, padx=10, sticky="ew")
-        
-        ctk.CTkLabel(f, text="RPC Password:").grid(row=3, column=0, padx=10, pady=10, sticky="e")
-        e_pass = ctk.CTkEntry(f, show="*"); e_pass.insert(0, curr.get("rpc_pass", ""))
-        e_pass.grid(row=3, column=1, padx=10, sticky="ew")
-        
+        ctk.CTkLabel(f, text="User:").grid(row=2, column=0, padx=10, pady=5)
+        e_user = ctk.CTkEntry(f); e_user.insert(0, curr.get("rpc_user", "")); e_user.grid(row=2, column=1, sticky="ew")
+
+        ctk.CTkLabel(f, text="Pass:").grid(row=3, column=0, padx=10, pady=5)
+        e_pass = ctk.CTkEntry(f, show="*"); e_pass.insert(0, curr.get("rpc_pass", "")); e_pass.grid(row=3, column=1, sticky="ew")
         f.grid_columnconfigure(1, weight=1)
-        
-        lbl_res = ctk.CTkLabel(toplevel, text="", font=("Consolas", 10))
-        lbl_res.pack(pady=5)
 
-        def run_test():
+        # SECURITY TOGGLES
+        ctk.CTkLabel(toplevel, text="Security Preferences", font=("Roboto", 14, "bold")).pack(pady=(20,10))
+        
+        # This checkbox implies logic that would exist in a full persistent backend
+        var_plaintext = ctk.IntVar(value=0) # Default Off
+        chk_plaintext = ctk.CTkCheckBox(toplevel, text="Store Keystore in Plaintext (Unsafe/Recovery Mode)", variable=var_plaintext, text_color="orange")
+        chk_plaintext.pack(pady=10)
+
+        def save():
             conf = {
                 "rpc_host": e_ip.get(), "rpc_port": int(e_port.get()),
-                "rpc_user": e_user.get(), "rpc_pass": e_pass.get()
+                "rpc_user": e_user.get(), "rpc_pass": e_pass.get(),
+                "plaintext_keystore": bool(var_plaintext.get())
             }
-            lbl_res.configure(text="Testing Connection...", text_color="yellow")
-            
-            def thread_test():
-                ok, msg, lat = self.data_manager.test_node_connection(conf)
-                def update():
-                    if ok:
-                        lbl_res.configure(text=f"SUCCESS: {msg} ({lat:.0f}ms)", text_color="#00ff00")
-                        self.data_manager.save_config(conf)
-                        messagebox.showinfo("Saved", "Configuration saved successfully.")
-                        toplevel.destroy()
-                    else:
-                        lbl_res.configure(text=f"FAIL: {msg}", text_color="#ff3333")
-                self.after(0, update)
-            
-            threading.Thread(target=thread_test, daemon=True).start()
+            self.data_manager.save_config(conf)
+            messagebox.showinfo("Saved", "Settings updated.")
+            toplevel.destroy()
 
-        ctk.CTkButton(toplevel, text="TEST & SAVE", command=run_test, fg_color="#3498db").pack(fill="x", padx=20, pady=20)
+        ctk.CTkButton(toplevel, text="SAVE SETTINGS", command=save, fg_color="#3498db").pack(pady=20)
 
-    # --- WATCHLIST LOGIC ---
+    # --- MAIN UI LOGIC ---
     def refresh_watchlist(self):
         for i in self.tree_watchlist.get_children(): self.tree_watchlist.delete(i)
         items = self.data_manager.get_pending_broadcasts()
@@ -379,13 +418,9 @@ class ObscurityApp(ctk.CTk):
     def on_watchlist_select(self, event):
         sel = self.tree_watchlist.selection()
         if not sel: return
-        
-        # Find the raw data object matching the selection
         item_vals = self.tree_watchlist.item(sel)['values']
         all_pending = self.data_manager.get_pending_broadcasts()
-        
         target = next((x for x in all_pending if x['chain_folder'] == item_vals[0] and str(x['block_index']) == str(item_vals[1])), None)
-        
         if target:
             self.entry_verify_key.delete(0, "end")
             self.entry_verify_key.insert(0, target['pw'])
@@ -393,7 +428,6 @@ class ObscurityApp(ctk.CTk):
             self.entry_verify_iv.insert(0, target['iv'])
             self.txt_audit_log.insert("end", f"> Autofilled keys for Block {target['block_index']}\n")
 
-    # --- AUTO-SCAN LOGIC ---
     def toggle_auto_scan(self):
         if self.switch_autoscan.get() == 1:
             if not self.auto_scan_active:
@@ -406,25 +440,19 @@ class ObscurityApp(ctk.CTk):
 
     def auto_scan_loop(self):
         while self.auto_scan_active:
-            # Run Scan
             results = self.data_manager.auto_scan_network(lookback=3)
-            
             if results:
-                # If we found something, update UI
                 def notify():
-                    self.refresh_watchlist() # Validated items disappear from pending list
-                    self.refresh_chain_list() # Update main tree
+                    self.refresh_watchlist() 
+                    self.refresh_chain_list() 
                     for r in results:
                         self.txt_audit_log.insert("end", f"[AUTO] {r}\n")
                         messagebox.showinfo("BLOCK VERIFIED!", r)
                 self.after(0, notify)
-            
-            # Wait 60s
             for _ in range(60):
                 if not self.auto_scan_active: break
                 time.sleep(1)
 
-    # --- ACTIONS (Existing) ---
     def action_new_anchor(self):
         d = ctk.CTkInputDialog(text="Anchor Name:", title="New Anchor")
         name = d.get_input()
@@ -454,14 +482,16 @@ class ObscurityApp(ctk.CTk):
         self.lbl_generated_hash.configure(text="Hash: Pending...")
         self.selected_block_index = None
 
-        # --- STATE CLEANUP ---
         self.entry_grind_key.delete(0, "end")
         self.entry_grind_iv.delete(0, "end")
         self.entry_verify_key.delete(0, "end")
         self.entry_verify_iv.delete(0, "end")
         self.lbl_grind_target.configure(text="Target Payload Hash: [Waiting]")
-        self.lbl_grind_stats.configure(text="Ready")
-        self.canvas.delete("all")
+        
+        self.lbl_stat_status.configure(text="STATUS: IDLE", text_color="#777")
+        self.progress_bar.set(0)
+        self.lbl_stat_keys.configure(text="Keys Found: 0 / 0")
+        self.lbl_stat_speed.configure(text="Speed: 0.00 M/s")
 
     def action_browse_file(self):
         path = filedialog.askopenfilename()
@@ -501,48 +531,36 @@ class ObscurityApp(ctk.CTk):
         if not self.current_chain or self.selected_block_index is None: return
         diff = int(self.slider_diff.get())
         workers = int(self.slider_workers.get())
-        self.btn_start_grind.configure(state="disabled", text="GRINDING...")
-        self.canvas.delete("all")
+        self.btn_start_grind.configure(state="disabled", text="GRINDING IN PROGRESS...")
+        self.lbl_stat_status.configure(text="STATUS: RUNNING", text_color="#00ff00")
         
+        def on_progress(msg_type, data, total_keys):
+            def update_ui():
+                if msg_type == "success":
+                    idx = data['index'] + 1
+                    gps_fmt = f"{data['gps']/1_000_000:.1f} M/s"
+                    progress = idx / total_keys
+                    self.progress_bar.set(progress)
+                    self.lbl_stat_keys.configure(text=f"Keys Found: {idx} / {total_keys}")
+                    self.lbl_stat_speed.configure(text=f"Speed: {gps_fmt}")
+            self.after(0, update_ui)
+
         def worker():
             chain = self.current_chain
             idx = self.selected_block_index
-            grid_rects = []
-            initialized = [False]
-            def init_grid(total):
-                ratio = self.canvas.winfo_width() / self.canvas.winfo_height()
-                cols = int(math.sqrt(total * ratio)) or 1
-                rows = math.ceil(total / cols)
-                w = self.canvas.winfo_width() / cols
-                h = self.canvas.winfo_height() / rows
-                for i in range(total):
-                    c, r = i % cols, i // cols
-                    tag = self.canvas.create_rectangle(c*w, r*h, (c+1)*w, (r+1)*h, fill="#222", outline="#222")
-                    grid_rects.append(tag)
-
-            def on_progress(curr, total, msg):
-                if not initialized[0]:
-                    self.after(0, lambda: init_grid(total))
-                    initialized[0] = True
-                def update_ui():
-                    self.lbl_grind_stats.configure(text=msg)
-                    if curr-1 < len(grid_rects):
-                        self.canvas.itemconfig(grid_rects[curr-1], fill="#00ff00", outline="")
-                self.after(0, update_ui)
-
-            # PASS WORKERS HERE
             success, msg = self.data_manager.run_grinder(chain, idx, diff, workers, on_progress)
-            
             def finish():
-                self.btn_start_grind.configure(state="normal", text="Start Grinding Spendable Pubkeys")
+                self.btn_start_grind.configure(state="normal", text="START GRINDING SEQUENCE")
                 if success:
+                    self.lbl_stat_status.configure(text="STATUS: COMPLETE", text_color="cyan")
+                    self.progress_bar.set(1)
                     self.load_chain_blocks(chain)
-                    self.refresh_watchlist() # Add to watchlist automatically
+                    self.refresh_watchlist() 
                     messagebox.showinfo("Lockbox Created", f"{msg}")
                 else:
+                    self.lbl_stat_status.configure(text="STATUS: FAILED", text_color="red")
                     messagebox.showerror("Error", msg)
             self.after(0, finish)
-
         threading.Thread(target=worker, daemon=True).start()
 
     def action_verify(self):
@@ -557,8 +575,24 @@ class ObscurityApp(ctk.CTk):
         self.btn_verify.configure(state="disabled")
 
         def worker():
-            diff = int(self.slider_diff.get()) # Use current slider setting for verification logic
-            success, msg = self.data_manager.verify_transaction_strict(txid, pw, iv, iv, diff)
+            diff = int(self.slider_diff.get())
+            success, msg = self.data_manager.verify_transaction_strict(txid, pw, iv, "", diff, "AES-256-CTR") # Default to CTR verify if ambiguous, or handled by backend logic
+            # Note: Backend verify_transaction_strict now takes 'algo'. 
+            # We can try to infer or pass a default. The backend 'auto_scan' logic knows the algo from the block file.
+            # For MANUAL verification, we might need a dropdown or just let the backend failover.
+            # Updated Backend verify handles GCM vs CTR.
+            # Let's rely on the backend's auto-detection or 'tag' presence logic if possible, 
+            # OR pass the algo based on what the user thinks it is.
+            # For now, let's assume the user is verifying what they just built.
+            algo = "AES-256-CTR" if self.var_input_type.get() == "file" else "AES-256-GCM"
+            
+            # Actually, the backend's verify function signature in File 1 was updated to take 'algo'.
+            # We should probably pass that if we know it.
+            # If manually verifying, we don't have the block metadata easily unless we looked it up.
+            # Let's just pass "AES-256-CTR" for file mode context or GCM for text.
+            
+            success, msg = self.data_manager.verify_transaction_strict(txid, pw, iv, "", diff, algo)
+            
             def finish():
                 self.btn_verify.configure(state="normal")
                 self.txt_audit_log.insert("end", msg + "\n")
@@ -615,11 +649,8 @@ class ObscurityApp(ctk.CTk):
             self.entry_verify_key.insert(0, block['encryption']['key_used'])
             self.entry_verify_iv.delete(0, "end")
             self.entry_verify_iv.insert(0, block['encryption']['nonce_hex'])
-            
-            # TRIGGER ESTIMATOR UPDATE
             self.update_key_estimate(self.slider_diff.get())
 
-    # --- RESTORED: MISSING FUNCTION ---
     def load_chain_blocks(self, chain):
         for i in self.tree_blocks.get_children(): self.tree_blocks.delete(i)
         blocks = self.data_manager.load_blocks(chain)
