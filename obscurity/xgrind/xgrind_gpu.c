@@ -19,7 +19,7 @@ int gpu_search_batch(uint32_t target, uint32_t mask, const uint8_t *priv, int ba
 #endif
 
 void build_gtable(uint8_t **outX, uint8_t **outY);
-#define GPU_BATCH_SIZE 16384
+#define GPU_BATCH_SIZE 4194304
 
 static void bytes_to_hex(const unsigned char *in, size_t len, char *out) {
     static const char *hex = "0123456789abcdef";
@@ -51,7 +51,8 @@ static int init_rng_global(void) {
 }
 
 static int grind_for_32bit_value_gpu(uint32_t v, uint32_t mask, unsigned char priv_out[32], unsigned char pub_out[33], uint64_t *attempts_out) {
-    unsigned char priv_batch[GPU_BATCH_SIZE][32];
+    // HACKATHON FIX: static to prevent stack overflow
+    static unsigned char priv_batch[GPU_BATCH_SIZE][32];
     uint64_t attempts_total = 0;
     for (;;) {
         for (int i = 0; i < GPU_BATCH_SIZE; ++i) {

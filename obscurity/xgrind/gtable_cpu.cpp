@@ -1,4 +1,5 @@
 // gtable_cpu.cpp - build secp256k1 GTable for GPU
+// FIXED: All debug prints now go to stderr to prevent stdout pollution
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,7 +16,8 @@ static void increaseStackSizeCPU() {
     struct rlimit rl;
     int result;
 
-    printf("Increasing Stack Size to %lu \n", (unsigned long)cpuStackSize);
+    // FIX: Send to stderr
+    fprintf(stderr, "Increasing Stack Size to %lu \n", (unsigned long)cpuStackSize);
 
     result = getrlimit(RLIMIT_STACK, &rl);
     if (result == 0) {
@@ -42,7 +44,8 @@ void build_gtable(uint8_t **outX, uint8_t **outY) {
         exit(1);
     }
 
-    printf("build_gtable: creating Secp256K1 context and GTable...\n");
+    // FIX: Send to stderr
+    fprintf(stderr, "build_gtable: creating Secp256K1 context and GTable...\n");
 
     Secp256K1 *secp = new Secp256K1();
     secp->Init();
@@ -58,7 +61,8 @@ void build_gtable(uint8_t **outX, uint8_t **outY) {
         }
     }
 
-    printf("build_gtable: finished\n");
+    // FIX: Send to stderr
+    fprintf(stderr, "build_gtable: finished\n");
 
     delete secp;
 
