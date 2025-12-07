@@ -28,7 +28,7 @@ class ObscurityApp(ctk.CTk):
         self.auto_scan_active = False
         
         # Window Setup
-        self.title("Obscurity [Anchor System] // Hackathon Build v3.1")
+        self.title("Obscurity [Anchor System] // Hackathon Build v3.4")
         self.geometry("1200x800")
         self.center_window(1200, 800)
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -102,8 +102,8 @@ class ObscurityApp(ctk.CTk):
         self.btn_fork = ctk.CTkButton(btn_frame, text="⑂ FORK SELECTED", height=40, fg_color="#3498db", hover_color="#2980b9", command=self.action_fork_chain)
         self.btn_fork.pack(fill="x", pady=4)
         
-        # SETTINGS BUTTON (NEW)
-        ctk.CTkFrame(btn_frame, height=2, fg_color="#333").pack(fill="x", pady=10) # Divider
+        # SETTINGS BUTTON
+        ctk.CTkFrame(btn_frame, height=2, fg_color="#333").pack(fill="x", pady=10) 
         self.btn_settings = ctk.CTkButton(btn_frame, text="⚙️ SETTINGS", height=30, fg_color="transparent", border_width=1, text_color="#aaa", hover_color="#333", command=self.action_open_settings)
         self.btn_settings.pack(fill="x", pady=4)
 
@@ -182,7 +182,7 @@ class ObscurityApp(ctk.CTk):
             self.txt_content.pack_forget()
             self.f_file_ui.pack(fill="both", expand=True, padx=2, pady=2)
 
-    # --- TAB 2: PUBKEY GRINDER ---
+    # --- TAB 2: PUBKEY GRINDER (UPDATED WITH ESTIMATOR) ---
     def setup_pubkey_grinder(self, parent):
         f_head = ctk.CTkFrame(parent, fg_color="#222")
         f_head.pack(fill="x", pady=10, padx=10)
@@ -202,13 +202,17 @@ class ObscurityApp(ctk.CTk):
         f_ctrl = ctk.CTkFrame(parent, fg_color="transparent")
         f_ctrl.pack(fill="x", padx=10, pady=10)
         
-        # Difficulty Slider
-        ctk.CTkLabel(f_ctrl, text="Difficulty (Bits):").pack(side="left", padx=5)
-        self.slider_diff = ctk.CTkSlider(f_ctrl, from_=16, to=32, number_of_steps=16, width=120, command=lambda v: self.lbl_diff_display.configure(text=f"{int(v)}"))
-        self.slider_diff.set(32)
+        # Difficulty Slider (UPDATED)
+        ctk.CTkLabel(f_ctrl, text="Density (Bits/Key):").pack(side="left", padx=5)
+        self.slider_diff = ctk.CTkSlider(f_ctrl, from_=16, to=64, number_of_steps=48, width=120, command=self.update_key_estimate)
+        self.slider_diff.set(32) # Default
         self.slider_diff.pack(side="left", padx=5)
         self.lbl_diff_display = ctk.CTkLabel(f_ctrl, text="32", width=30)
         self.lbl_diff_display.pack(side="left")
+
+        # ESTIMATOR LABEL (NEW)
+        self.lbl_key_estimate = ctk.CTkLabel(f_ctrl, text="Est. Keys: --", text_color="#F39C12", font=("Roboto", 11, "bold"))
+        self.lbl_key_estimate.pack(side="left", padx=15)
 
         # Worker Slider
         ctk.CTkLabel(f_ctrl, text="Parallel Workers:").pack(side="left", padx=(20, 5))
@@ -228,9 +232,34 @@ class ObscurityApp(ctk.CTk):
         self.lbl_grind_stats = ctk.CTkLabel(parent, text="Ready", font=("Consolas", 11))
         self.lbl_grind_stats.pack(side="left", padx=10, pady=5)
 
-    # --- TAB 3: VERIFY ONCHAIN (UPDATED) ---
+    # --- ESTIMATOR LOGIC (CALIBRATED FOR BINARY HASH) ---
+    def update_key_estimate(self, value):
+        val = int(value)
+        self.lbl_diff_display.configure(text=f"{val}")
+        
+        # Default Payload Size: 48 Bytes
+        # (32 Bytes SHA-256 Hash + 16 Bytes AES-GCM Tag)
+        payload_size = 48 
+        
+        # If we have a block selected, check if we can get exact encrypted size
+        if self.selected_block_index is not None and self.current_chain:
+            try:
+                blocks = self.data_manager.load_blocks(self.current_chain)
+                block = next((b for b in blocks if b['header']['index'] == self.selected_block_index), None)
+                if block:
+                    cipher = block['encryption'].get('ciphertext_hex', "")
+                    if cipher: payload_size = len(cipher) / 2 # Hex to Bytes
+            except: pass
+            
+        # Math: Bytes / (Bits_Per_Key / 8)
+        bytes_per_key = val / 8
+        if bytes_per_key > 0:
+            num_keys = math.ceil(payload_size / bytes_per_key)
+            self.lbl_key_estimate.configure(text=f"Est. Keys: ~{num_keys}")
+
+    # --- TAB 3: VERIFY ONCHAIN ---
     def setup_verify_onchain(self, parent):
-        # 1. WATCHLIST SECTION (NEW)
+        # 1. WATCHLIST SECTION
         ctk.CTkLabel(parent, text="Pending Watchlist (Ready for Chain):", font=("Roboto", 12, "bold"), text_color="orange").pack(anchor="w", padx=20, pady=(15,5))
         
         wl_frame = ctk.CTkFrame(parent, height=150)
@@ -281,7 +310,7 @@ class ObscurityApp(ctk.CTk):
         # Initial Load
         self.refresh_watchlist()
 
-    # --- SETTINGS MODAL (NEW) ---
+    # --- SETTINGS MODAL ---
     def action_open_settings(self):
         toplevel = ctk.CTkToplevel(self)
         toplevel.title("Settings // Node Connection")
@@ -425,6 +454,15 @@ class ObscurityApp(ctk.CTk):
         self.lbl_generated_hash.configure(text="Hash: Pending...")
         self.selected_block_index = None
 
+        # --- STATE CLEANUP ---
+        self.entry_grind_key.delete(0, "end")
+        self.entry_grind_iv.delete(0, "end")
+        self.entry_verify_key.delete(0, "end")
+        self.entry_verify_iv.delete(0, "end")
+        self.lbl_grind_target.configure(text="Target Payload Hash: [Waiting]")
+        self.lbl_grind_stats.configure(text="Ready")
+        self.canvas.delete("all")
+
     def action_browse_file(self):
         path = filedialog.askopenfilename()
         if path:
@@ -519,7 +557,7 @@ class ObscurityApp(ctk.CTk):
         self.btn_verify.configure(state="disabled")
 
         def worker():
-            diff = 32 
+            diff = int(self.slider_diff.get()) # Use current slider setting for verification logic
             success, msg = self.data_manager.verify_transaction_strict(txid, pw, iv, iv, diff)
             def finish():
                 self.btn_verify.configure(state="normal")
@@ -544,16 +582,6 @@ class ObscurityApp(ctk.CTk):
         self.current_chain = self.tree_chains.item(sel)['values'][0]
         self.load_chain_blocks(self.current_chain)
 
-    def load_chain_blocks(self, chain):
-        for i in self.tree_blocks.get_children(): self.tree_blocks.delete(i)
-        blocks = self.data_manager.load_blocks(chain)
-        for b in blocks:
-            st = b['header']['status']
-            icon = "🔗" if st == "verified" else "✅" if st == "ready_to_link" else "📝"
-            h = b['header']['block_hash']
-            idx = b['header']['index']
-            self.tree_blocks.insert("", "end", values=(idx, f"{icon} {h[:8]}..."))
-
     def on_block_select(self, event):
         if not event:
             if self.selected_block_index is None: return
@@ -574,8 +602,8 @@ class ObscurityApp(ctk.CTk):
             if preview:
                 self.txt_content.insert("0.0", preview)
             else:
-                self.lbl_file_name.configure(text=f"{block['content']['filename']} (Encrypted)")
-                self.txt_content.insert("0.0", f"[Binary File: {block['content']['filename']}]")
+                self.lbl_file_name.configure(text=f"{block['content']['original_filename']} (Encrypted Hash)")
+                self.txt_content.insert("0.0", f"[File Hash]: {block['content']['content_hash_sha256']}")
             self.lbl_generated_hash.configure(text=f"Hash: {block['header']['block_hash']}")
             enc_hash = hashlib.sha256(bytes.fromhex(block['encryption']['ciphertext_hex'])).hexdigest()[:16]
             self.lbl_grind_target.configure(text=f"Target Payload Hash: {enc_hash}...")
@@ -587,6 +615,20 @@ class ObscurityApp(ctk.CTk):
             self.entry_verify_key.insert(0, block['encryption']['key_used'])
             self.entry_verify_iv.delete(0, "end")
             self.entry_verify_iv.insert(0, block['encryption']['nonce_hex'])
+            
+            # TRIGGER ESTIMATOR UPDATE
+            self.update_key_estimate(self.slider_diff.get())
+
+    # --- RESTORED: MISSING FUNCTION ---
+    def load_chain_blocks(self, chain):
+        for i in self.tree_blocks.get_children(): self.tree_blocks.delete(i)
+        blocks = self.data_manager.load_blocks(chain)
+        for b in blocks:
+            st = b['header']['status']
+            icon = "🔗" if st == "verified" else "✅" if st == "ready_to_link" else "📝"
+            h = b['header']['block_hash']
+            idx = b['header']['index']
+            self.tree_blocks.insert("", "end", values=(idx, f"{icon} {h[:8]}..."))
 
 if __name__ == "__main__":
     try:

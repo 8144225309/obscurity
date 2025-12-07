@@ -174,12 +174,38 @@ class DataManager:
                 with open(os.path.join(blocks_dir, fname), "r") as f: data.append(json.load(f))
         return data
 
-    # --- BLOCK FACTORY ---
+    # --- BLOCK FACTORY (CORRECTED: RAW BINARY HASH) ---
     def commit_block(self, chain_folder, index, prev_hash, data_bytes, filename="data.bin"):
         chain_id = chain_folder.split('_')[-1]
-        content_hash = hashlib.sha256(data_bytes).hexdigest()
-        cipher_hex, nonce_hex, tag_hex = self.encrypt_data(chain_id, data_bytes)
         
+        # 1. Calculate Content Hash (HEX for Metadata, BINARY for Payload)
+        content_hash_hex = hashlib.sha256(data_bytes).hexdigest()
+        content_hash_bin = hashlib.sha256(data_bytes).digest() # 32 Bytes Raw
+        
+        # 2. Determine Payload
+        is_file_mode = len(data_bytes) > 500 or filename != "msg.txt"
+        
+        payload_to_encrypt = b""
+        local_file_path = None
+        
+        if is_file_mode:
+            # SAVE RAW FILE LOCALLY
+            saved_filename = f"{index:05d}_{filename}"
+            local_file_path = os.path.join(CHAINS_DIR, chain_folder, "blocks", saved_filename)
+            with open(local_file_path, "wb") as f:
+                f.write(data_bytes)
+                
+            # ENCRYPT RAW BINARY HASH (32 BYTES)
+            # This ensures exactly 8 keys at 32-bit density (32 bytes / 4 bytes = 8)
+            payload_to_encrypt = content_hash_bin
+        else:
+            # ENCRYPT RAW TEXT
+            payload_to_encrypt = data_bytes
+
+        # 3. Encrypt
+        cipher_hex, nonce_hex, tag_hex = self.encrypt_data(chain_id, payload_to_encrypt)
+        
+        # 4. Header Hash
         hasher = hashlib.sha256()
         hasher.update(str(index).encode())
         hasher.update(str(prev_hash).encode())
@@ -198,14 +224,16 @@ class DataManager:
                 "txid": None
             },
             "content": {
-                "type": "file" if len(data_bytes) > 500 else "text",
-                "filename": filename,
+                "type": "file_hash" if is_file_mode else "text",
+                "original_filename": filename,
+                "local_storage_path": os.path.basename(local_file_path) if local_file_path else None,
                 "size_bytes": len(data_bytes),
-                "content_hash_sha256": content_hash,
-                "preview": data_bytes.decode('utf-8', errors='ignore') if len(data_bytes) < 200 else None
+                "content_hash_sha256": content_hash_hex, # Store Hex for readability in JSON
+                "preview": data_bytes.decode('utf-8', errors='ignore') if not is_file_mode else f"[RAW HASH PAYLOAD] {content_hash_hex}"
             },
             "encryption": {
                 "algo": "AES-256-GCM",
+                "payload_type": "hash_bin_32bytes" if is_file_mode else "full_content",
                 "ciphertext_hex": cipher_hex,
                 "nonce_hex": nonce_hex,
                 "tag_hex": tag_hex,
