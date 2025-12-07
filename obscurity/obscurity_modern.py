@@ -22,7 +22,7 @@ class ObscurityApp(ctk.CTk):
         # Draft State (The "Unsaved" Block)
         self.draft_payload = None
         self.draft_filename = None
-        self.draft_mode = "text" # or "file"
+        # Mode triggers: "text" or "file" (managed by radio buttons)
 
         # Window Setup
         self.title("Obscurity [Anchor System] // Hackathon Build v3.0")
@@ -80,7 +80,7 @@ class ObscurityApp(ctk.CTk):
         self.tree_chains.pack(side="left", fill="both", expand=True)
         self.tree_chains.bind("<<TreeviewSelect>>", self.on_chain_select)
         
-        # Action Buttons (Green/Blue per request)
+        # Action Buttons (The Big Green/Blue buttons)
         btn_frame = ctk.CTkFrame(self.frame_left, fg_color="transparent")
         btn_frame.pack(side="bottom", fill="x", pady=20, padx=15)
         
@@ -146,7 +146,7 @@ class ObscurityApp(ctk.CTk):
         # Content Area
         ctk.CTkLabel(parent, text="Block Content Payload:", anchor="w").pack(fill="x", padx=15)
         
-        # Input Container
+        # NEW CONTAINER: Fixes the Thonny crash by isolating inputs
         self.f_input_container = ctk.CTkFrame(parent, fg_color="#222", corner_radius=6)
         self.f_input_container.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -154,7 +154,7 @@ class ObscurityApp(ctk.CTk):
         self.txt_content = ctk.CTkTextbox(self.f_input_container, wrap="word", font=("Consolas", 12))
         self.txt_content.pack(fill="both", expand=True, padx=2, pady=2)
         
-        # File Widget (Hidden by default)
+        # File Widget (Hidden by default, packed when needed)
         self.f_file_ui = ctk.CTkFrame(self.f_input_container, fg_color="transparent")
         self.btn_browse = ctk.CTkButton(self.f_file_ui, text="📂 Browse File...", width=150, command=self.action_browse_file)
         self.btn_browse.pack(side="left", padx=10)
@@ -164,8 +164,11 @@ class ObscurityApp(ctk.CTk):
         # Mode Switcher (Text/File) - Only for Drafts
         self.f_draft_tools = ctk.CTkFrame(parent, fg_color="transparent")
         self.var_input_type = ctk.StringVar(value="text")
-        ctk.CTkRadioButton(self.f_draft_tools, text="Text Data", variable=self.var_input_type, value="text", command=self.toggle_draft_ui).pack(side="left", padx=10)
-        ctk.CTkRadioButton(self.f_draft_tools, text="Binary File", variable=self.var_input_type, value="file", command=self.toggle_draft_ui).pack(side="left", padx=10)
+        # Radio buttons to toggle
+        r1 = ctk.CTkRadioButton(self.f_draft_tools, text="Text Data", variable=self.var_input_type, value="text", command=self.toggle_draft_ui)
+        r1.pack(side="left", padx=10)
+        r2 = ctk.CTkRadioButton(self.f_draft_tools, text="Binary File", variable=self.var_input_type, value="file", command=self.toggle_draft_ui)
+        r2.pack(side="left", padx=10)
         
         # Commit Button
         self.btn_commit = ctk.CTkButton(parent, text="🔒 GENERATE HASH & COMMIT", height=50, fg_color="green", hover_color="darkgreen", font=("Roboto", 14, "bold"), command=self.action_commit_block)
@@ -176,7 +179,7 @@ class ObscurityApp(ctk.CTk):
         self.lbl_generated_hash.pack(pady=5)
 
     def toggle_draft_ui(self):
-        # Swaps between Text Box and File Picker
+        # Swaps between Text Box and File Picker using pack_forget
         mode = self.var_input_type.get()
         if mode == "text":
             self.f_file_ui.pack_forget()
@@ -292,10 +295,7 @@ class ObscurityApp(ctk.CTk):
         self.lbl_file_name.configure(text="No file selected")
         self.draft_payload = None
         self.lbl_generated_hash.configure(text="Hash: Pending Commit...")
-        
-        # Determine next index
-        blocks = self.data_manager.load_blocks(self.current_chain)
-        self.draft_next_index = len(blocks)
+        self.selected_block_index = None # Deselect until saved
 
     def action_browse_file(self):
         path = filedialog.askopenfilename()
@@ -332,8 +332,17 @@ class ObscurityApp(ctk.CTk):
         # UI Update
         self.lbl_generated_hash.configure(text=f"Hash: {block['header']['block_hash']}")
         self.load_chain_blocks(self.current_chain)
-        self.on_block_select(None) # Refresh view mode
+        self.refresh_chain_list() # To update block counts if we show them
         messagebox.showinfo("Committed", "Block encrypted and saved to disk.")
+        
+        # Auto-select the newly created block
+        # We need to find the item ID in the tree
+        for child in self.tree_blocks.get_children():
+            vals = self.tree_blocks.item(child)['values']
+            if vals[0] == idx:
+                self.tree_blocks.selection_set(child)
+                self.on_block_select(None)
+                break
 
     def action_run_grinder(self):
         if not self.current_chain or self.selected_block_index is None: return
@@ -399,7 +408,7 @@ class ObscurityApp(ctk.CTk):
     def refresh_chain_list(self):
         for i in self.tree_chains.get_children(): self.tree_chains.delete(i)
         for c in self.data_manager.get_chains():
-            icon = "⚓" if c['type'] == 'anchor' else "⑂"
+            icon = "⚓" if c.get('type') == 'anchor' else "⑂"
             name = f"{icon} {c['name']}"
             self.tree_chains.insert("", "end", text=name, values=(c['folder'],))
 
@@ -421,14 +430,17 @@ class ObscurityApp(ctk.CTk):
             self.tree_blocks.insert("", "end", values=(idx, f"{icon} {h[:8]}..."))
 
     def on_block_select(self, event):
-        sel = self.tree_blocks.selection()
-        if not sel: return
-        idx = self.tree_blocks.item(sel)['values'][0]
-        self.selected_block_index = idx
+        if not event: # Manual trigger from code
+            if self.selected_block_index is None: return
+        else:
+            sel = self.tree_blocks.selection()
+            if not sel: return
+            idx = self.tree_blocks.item(sel)['values'][0]
+            self.selected_block_index = idx
         
         # Load block data
         blocks = self.data_manager.load_blocks(self.current_chain)
-        block = next((b for b in blocks if b['header']['index'] == idx), None)
+        block = next((b for b in blocks if b['header']['index'] == self.selected_block_index), None)
         
         if block:
             # 1. Update Factory Tab (View Mode)
@@ -439,20 +451,20 @@ class ObscurityApp(ctk.CTk):
             # Show content
             self.txt_content.delete("0.0", "end")
             preview = block['content'].get('preview')
+            
             if preview:
-                self.toggle_draft_ui() # Ensure text mode
-                self.txt_content.insert("0.0", preview)
-                self.txt_content.pack(fill="both", expand=True)
                 self.f_file_ui.pack_forget()
+                self.txt_content.pack(fill="both", expand=True, padx=2, pady=2)
+                self.txt_content.insert("0.0", preview)
             else:
                 self.txt_content.pack_forget()
-                self.f_file_ui.pack(fill="both", expand=True)
+                self.f_file_ui.pack(fill="both", expand=True, padx=2, pady=2)
                 self.lbl_file_name.configure(text=f"{block['content']['filename']} (Encrypted)")
 
             self.lbl_generated_hash.configure(text=f"Hash: {block['header']['block_hash']}")
             
             # 2. Update Grinder Tab
-            self.lbl_grind_target.configure(text=f"Block {idx}")
+            self.lbl_grind_target.configure(text=f"Block {block['header']['index']}")
             
             # 3. Update Audit Tab
             self.lbl_audit_local.configure(text=block['header']['block_hash'])
