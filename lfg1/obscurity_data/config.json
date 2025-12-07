@@ -1,7 +1,0 @@
-{
-    "rpc_host": "127.0.0.1",
-    "rpc_port": 8332,
-    "rpc_user": "",
-    "rpc_pass": "",
-    "data_dir": "C:\\Users\\-\\AppData\\Roaming\\Bitcoin"
-}
