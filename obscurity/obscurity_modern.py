@@ -24,10 +24,13 @@ class ObscurityApp(ctk.CTk):
         self.draft_payload = None
         self.draft_filename = None
         
+        # Auto-Scan State
+        self.auto_scan_active = False
+        
         # Window Setup
-        self.title("Obscurity [Anchor System] // Hackathon Build v3.0")
-        self.geometry("1100x750")
-        self.center_window(1100, 750)
+        self.title("Obscurity [Anchor System] // Hackathon Build v3.1")
+        self.geometry("1200x800")
+        self.center_window(1200, 800)
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # --- MAIN GRID ---
@@ -60,6 +63,7 @@ class ObscurityApp(ctk.CTk):
         self.refresh_chain_list()
 
     def on_closing(self):
+        self.auto_scan_active = False
         self.destroy()
         os._exit(0)
 
@@ -88,12 +92,20 @@ class ObscurityApp(ctk.CTk):
         self.tree_chains = ttk.Treeview(tree_frame, show="tree", selectmode="browse")
         self.tree_chains.pack(side="left", fill="both", expand=True)
         self.tree_chains.bind("<<TreeviewSelect>>", self.on_chain_select)
+        
+        # Buttons Frame
         btn_frame = ctk.CTkFrame(self.frame_left, fg_color="transparent")
         btn_frame.pack(side="bottom", fill="x", pady=15, padx=10)
+        
         self.btn_new_anchor = ctk.CTkButton(btn_frame, text="⚓ NEW ANCHOR", height=40, fg_color="#2ecc71", hover_color="#27ae60", command=self.action_new_anchor)
         self.btn_new_anchor.pack(fill="x", pady=4)
         self.btn_fork = ctk.CTkButton(btn_frame, text="⑂ FORK SELECTED", height=40, fg_color="#3498db", hover_color="#2980b9", command=self.action_fork_chain)
         self.btn_fork.pack(fill="x", pady=4)
+        
+        # SETTINGS BUTTON (NEW)
+        ctk.CTkFrame(btn_frame, height=2, fg_color="#333").pack(fill="x", pady=10) # Divider
+        self.btn_settings = ctk.CTkButton(btn_frame, text="⚙️ SETTINGS", height=30, fg_color="transparent", border_width=1, text_color="#aaa", hover_color="#333", command=self.action_open_settings)
+        self.btn_settings.pack(fill="x", pady=4)
 
     # --- MID COLUMN ---
     def build_history_column(self):
@@ -198,7 +210,7 @@ class ObscurityApp(ctk.CTk):
         self.lbl_diff_display = ctk.CTkLabel(f_ctrl, text="32", width=30)
         self.lbl_diff_display.pack(side="left")
 
-        # Worker Slider (NEW)
+        # Worker Slider
         ctk.CTkLabel(f_ctrl, text="Parallel Workers:").pack(side="left", padx=(20, 5))
         self.slider_workers = ctk.CTkSlider(f_ctrl, from_=1, to=16, number_of_steps=15, width=120, command=lambda v: self.lbl_workers_display.configure(text=f"{int(v)}"))
         self.slider_workers.set(4)
@@ -216,9 +228,36 @@ class ObscurityApp(ctk.CTk):
         self.lbl_grind_stats = ctk.CTkLabel(parent, text="Ready", font=("Consolas", 11))
         self.lbl_grind_stats.pack(side="left", padx=10, pady=5)
 
-    # --- TAB 3: VERIFY ONCHAIN ---
+    # --- TAB 3: VERIFY ONCHAIN (UPDATED) ---
     def setup_verify_onchain(self, parent):
-        ctk.CTkLabel(parent, text="Step 1: Input Chain Data", font=("Roboto", 12, "bold")).pack(anchor="w", padx=20, pady=(15,5))
+        # 1. WATCHLIST SECTION (NEW)
+        ctk.CTkLabel(parent, text="Pending Watchlist (Ready for Chain):", font=("Roboto", 12, "bold"), text_color="orange").pack(anchor="w", padx=20, pady=(15,5))
+        
+        wl_frame = ctk.CTkFrame(parent, height=150)
+        wl_frame.pack(fill="x", padx=20)
+        
+        cols = ("chain", "block", "status")
+        self.tree_watchlist = ttk.Treeview(wl_frame, columns=cols, show="headings", height=5)
+        self.tree_watchlist.heading("chain", text="Chain")
+        self.tree_watchlist.heading("block", text="Block #")
+        self.tree_watchlist.heading("status", text="First Key (Prefix)")
+        self.tree_watchlist.column("chain", width=150)
+        self.tree_watchlist.column("block", width=60, anchor="center")
+        self.tree_watchlist.pack(side="left", fill="both", expand=True)
+        self.tree_watchlist.bind("<<TreeviewSelect>>", self.on_watchlist_select)
+        
+        # Watchlist Toolbar
+        wl_tools = ctk.CTkFrame(parent, fg_color="transparent")
+        wl_tools.pack(fill="x", padx=20, pady=5)
+        
+        ctk.CTkButton(wl_tools, text="↻ Refresh List", width=100, command=self.refresh_watchlist).pack(side="left")
+        
+        # AUTO-SCAN SWITCH
+        self.switch_autoscan = ctk.CTkSwitch(wl_tools, text="AUTO-SCAN NETWORK (Every 60s)", command=self.toggle_auto_scan)
+        self.switch_autoscan.pack(side="right")
+
+        # 2. MANUAL VERIFY
+        ctk.CTkLabel(parent, text="Manual Verification:", font=("Roboto", 12, "bold")).pack(anchor="w", padx=20, pady=(20,5))
         f_form = ctk.CTkFrame(parent)
         f_form.pack(fill="x", padx=20)
         ctk.CTkLabel(f_form, text="Transaction ID:", width=100, anchor="e").grid(row=0, column=0, padx=10, pady=5)
@@ -234,11 +273,129 @@ class ObscurityApp(ctk.CTk):
 
         self.btn_verify = ctk.CTkButton(parent, text="CONNECT NODE & VERIFY (STRICT 1:1)", height=45, fg_color="#f39c12", hover_color="#d35400", command=self.action_verify)
         self.btn_verify.pack(fill="x", padx=40, pady=20)
+        
         ctk.CTkLabel(parent, text="Verification Log:", anchor="w").pack(fill="x", padx=20)
-        self.txt_audit_log = ctk.CTkTextbox(parent, font=("Consolas", 10), height=150)
+        self.txt_audit_log = ctk.CTkTextbox(parent, font=("Consolas", 10), height=100)
         self.txt_audit_log.pack(fill="both", expand=True, padx=20, pady=10)
 
-    # --- ACTIONS ---
+        # Initial Load
+        self.refresh_watchlist()
+
+    # --- SETTINGS MODAL (NEW) ---
+    def action_open_settings(self):
+        toplevel = ctk.CTkToplevel(self)
+        toplevel.title("Settings // Node Connection")
+        toplevel.geometry("500x400")
+        toplevel.transient(self) # Keep on top
+        
+        curr = self.data_manager.config
+        
+        ctk.CTkLabel(toplevel, text="Bitcoin Node Configuration (RPC)", font=("Roboto", 16, "bold")).pack(pady=20)
+        
+        f = ctk.CTkFrame(toplevel)
+        f.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        ctk.CTkLabel(f, text="IP Address:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
+        e_ip = ctk.CTkEntry(f); e_ip.insert(0, curr.get("rpc_host", "127.0.0.1"))
+        e_ip.grid(row=0, column=1, padx=10, sticky="ew")
+        
+        ctk.CTkLabel(f, text="Port:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        e_port = ctk.CTkEntry(f); e_port.insert(0, str(curr.get("rpc_port", 8332)))
+        e_port.grid(row=1, column=1, padx=10, sticky="ew")
+
+        ctk.CTkLabel(f, text="RPC User:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        e_user = ctk.CTkEntry(f); e_user.insert(0, curr.get("rpc_user", ""))
+        e_user.grid(row=2, column=1, padx=10, sticky="ew")
+        
+        ctk.CTkLabel(f, text="RPC Password:").grid(row=3, column=0, padx=10, pady=10, sticky="e")
+        e_pass = ctk.CTkEntry(f, show="*"); e_pass.insert(0, curr.get("rpc_pass", ""))
+        e_pass.grid(row=3, column=1, padx=10, sticky="ew")
+        
+        f.grid_columnconfigure(1, weight=1)
+        
+        lbl_res = ctk.CTkLabel(toplevel, text="", font=("Consolas", 10))
+        lbl_res.pack(pady=5)
+
+        def run_test():
+            conf = {
+                "rpc_host": e_ip.get(), "rpc_port": int(e_port.get()),
+                "rpc_user": e_user.get(), "rpc_pass": e_pass.get()
+            }
+            lbl_res.configure(text="Testing Connection...", text_color="yellow")
+            
+            def thread_test():
+                ok, msg, lat = self.data_manager.test_node_connection(conf)
+                def update():
+                    if ok:
+                        lbl_res.configure(text=f"SUCCESS: {msg} ({lat:.0f}ms)", text_color="#00ff00")
+                        self.data_manager.save_config(conf)
+                        messagebox.showinfo("Saved", "Configuration saved successfully.")
+                        toplevel.destroy()
+                    else:
+                        lbl_res.configure(text=f"FAIL: {msg}", text_color="#ff3333")
+                self.after(0, update)
+            
+            threading.Thread(target=thread_test, daemon=True).start()
+
+        ctk.CTkButton(toplevel, text="TEST & SAVE", command=run_test, fg_color="#3498db").pack(fill="x", padx=20, pady=20)
+
+    # --- WATCHLIST LOGIC ---
+    def refresh_watchlist(self):
+        for i in self.tree_watchlist.get_children(): self.tree_watchlist.delete(i)
+        items = self.data_manager.get_pending_broadcasts()
+        for item in items:
+            key_preview = item['first_key'][:16] + "..."
+            self.tree_watchlist.insert("", "end", values=(item['chain_folder'], item['block_index'], key_preview))
+
+    def on_watchlist_select(self, event):
+        sel = self.tree_watchlist.selection()
+        if not sel: return
+        
+        # Find the raw data object matching the selection
+        item_vals = self.tree_watchlist.item(sel)['values']
+        all_pending = self.data_manager.get_pending_broadcasts()
+        
+        target = next((x for x in all_pending if x['chain_folder'] == item_vals[0] and str(x['block_index']) == str(item_vals[1])), None)
+        
+        if target:
+            self.entry_verify_key.delete(0, "end")
+            self.entry_verify_key.insert(0, target['pw'])
+            self.entry_verify_iv.delete(0, "end")
+            self.entry_verify_iv.insert(0, target['iv'])
+            self.txt_audit_log.insert("end", f"> Autofilled keys for Block {target['block_index']}\n")
+
+    # --- AUTO-SCAN LOGIC ---
+    def toggle_auto_scan(self):
+        if self.switch_autoscan.get() == 1:
+            if not self.auto_scan_active:
+                self.auto_scan_active = True
+                self.lbl_status.configure(text="AUTO-SCAN: ACTIVE", text_color="#00ff00")
+                threading.Thread(target=self.auto_scan_loop, daemon=True).start()
+        else:
+            self.auto_scan_active = False
+            self.lbl_status.configure(text="System Ready", text_color="#00ff00")
+
+    def auto_scan_loop(self):
+        while self.auto_scan_active:
+            # Run Scan
+            results = self.data_manager.auto_scan_network(lookback=3)
+            
+            if results:
+                # If we found something, update UI
+                def notify():
+                    self.refresh_watchlist() # Validated items disappear from pending list
+                    self.refresh_chain_list() # Update main tree
+                    for r in results:
+                        self.txt_audit_log.insert("end", f"[AUTO] {r}\n")
+                        messagebox.showinfo("BLOCK VERIFIED!", r)
+                self.after(0, notify)
+            
+            # Wait 60s
+            for _ in range(60):
+                if not self.auto_scan_active: break
+                time.sleep(1)
+
+    # --- ACTIONS (Existing) ---
     def action_new_anchor(self):
         d = ctk.CTkInputDialog(text="Anchor Name:", title="New Anchor")
         name = d.get_input()
@@ -342,6 +499,7 @@ class ObscurityApp(ctk.CTk):
                 self.btn_start_grind.configure(state="normal", text="Start Grinding Spendable Pubkeys")
                 if success:
                     self.load_chain_blocks(chain)
+                    self.refresh_watchlist() # Add to watchlist automatically
                     messagebox.showinfo("Lockbox Created", f"{msg}")
                 else:
                     messagebox.showerror("Error", msg)

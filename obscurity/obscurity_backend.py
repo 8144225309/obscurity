@@ -59,6 +59,39 @@ class DataManager:
         self.config.update(new_conf)
         with open(CONFIG_FILE, 'w') as f: json.dump(self.config, f, indent=4)
 
+    # --- CONNECTIVITY: NODE CONFIG TESTER ---
+    def test_node_connection(self, test_config=None):
+        """
+        Tests connection to Bitcoin Core with provided config or current config.
+        Returns: (Success (Bool), Message (Str), Latency_ms (float))
+        """
+        cfg = test_config if test_config else self.config
+        url = f"http://{cfg['rpc_host']}:{cfg['rpc_port']}"
+        payload = {"method": "getblockchaininfo", "params": [], "jsonrpc": "2.0", "id": 1}
+        auth = (cfg['rpc_user'], cfg['rpc_pass'])
+        
+        try:
+            start = time.time()
+            resp = requests.post(url, data=json.dumps(payload), headers={'content-type': 'application/json'}, auth=auth, timeout=3)
+            latency = (time.time() - start) * 1000
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get('error'):
+                    return False, f"RPC Error: {data['error']}", 0
+                chain = data['result']['chain']
+                blocks = data['result']['blocks']
+                return True, f"Connected to {chain.upper()} (Height: {blocks})", latency
+            elif resp.status_code == 401:
+                return False, "Authentication Failed (Check User/Pass)", 0
+            else:
+                return False, f"HTTP Error {resp.status_code}", 0
+                
+        except requests.exceptions.ConnectionError:
+            return False, "Connection Refused (Check IP/Port)", 0
+        except Exception as e:
+            return False, str(e), 0
+
     # --- ENCRYPTION ENGINE (AES-256-GCM) ---
     def _derive_key(self, password_str):
         return hashlib.sha256(password_str.encode()).digest()
@@ -265,6 +298,117 @@ class DataManager:
 
         except Exception as e:
             return False, f"Grinder Exception: {str(e)}"
+
+    # --- WATCHLIST: PERSISTENCE LAYER ---
+    def get_pending_broadcasts(self):
+        """
+        Scans all local chains for blocks that are 'ready_to_link' but not 'verified'.
+        Used to populate the Auto-Scan Watchlist.
+        """
+        pending_list = []
+        if not os.path.exists(CHAINS_DIR): return []
+
+        for chain_folder in os.listdir(CHAINS_DIR):
+            blocks_dir = os.path.join(CHAINS_DIR, chain_folder, "blocks")
+            if not os.path.exists(blocks_dir): continue
+
+            for fname in sorted(os.listdir(blocks_dir)):
+                if fname.endswith(".json"):
+                    try:
+                        with open(os.path.join(blocks_dir, fname), "r") as f:
+                            blk = json.load(f)
+                            
+                        # CRITERIA: Has been ground (keys exist) but not verified on-chain
+                        if blk['header']['status'] == "ready_to_link":
+                            keys = blk.get('steganography', {}).get('keys', [])
+                            if keys:
+                                pending_list.append({
+                                    "chain_folder": chain_folder,
+                                    "block_index": blk['header']['index'],
+                                    "block_hash": blk['header']['block_hash'],
+                                    "first_key": keys[0], # We scan for the first key to identify the TX
+                                    "filename": fname,
+                                    "iv": blk['encryption']['nonce_hex'],
+                                    "pw": blk['encryption']['key_used'],
+                                    "diff": blk['steganography'].get('difficulty_bits', 32)
+                                })
+                    except: continue
+        return pending_list
+
+    # --- AUTOMATION: AUTO-SCAN ENGINE ---
+    def auto_scan_network(self, lookback=3):
+        """
+        1. Fetch last N blocks.
+        2. Get all 'pending' local blocks.
+        3. Match TX output keys against pending first_keys.
+        4. If match, Verify + Update Status.
+        """
+        # 1. Get Pending
+        pending = self.get_pending_broadcasts()
+        if not pending: return [] # Nothing to look for
+
+        # 2. Get Recent Blocks
+        try:
+            tip_hash = self.rpc_call("getbestblockhash")['result']
+            # We will just traverse backwards via 'previousblockhash' manually or getblock(height)
+            # Simpler: Get height, then loop indices
+            tip_info = self.rpc_call("getblock", [tip_hash, 1])['result']
+            tip_height = tip_info['height']
+        except:
+            return [] # Node error
+
+        found_updates = []
+
+        # Scan loop
+        for h in range(tip_height, tip_height - lookback, -1):
+            blk_data = self.rpc_call("getblockhash", [h])
+            if 'error' in blk_data and blk_data['error']: continue
+            
+            blk_hash = blk_data['result']
+            # Verbosity 2 gives us full TX details
+            full_blk = self.rpc_call("getblock", [blk_hash, 2])
+            if 'result' not in full_blk: continue
+            
+            txs = full_blk['result']['tx'] # List of full TX objects
+
+            # Optimization: Create a set of target keys for O(1) lookup
+            # Map { target_pubkey : pending_obj }
+            target_map = { p['first_key'] : p for p in pending }
+
+            for tx in txs:
+                txid = tx['txid']
+                # Check outputs for P2PK matches
+                for vout in tx['vout']:
+                    spk = vout['scriptPubKey'].get('hex', '')
+                    # Quick check: is it P2PK? (starts 21... ends ac, len 70)
+                    if len(spk) == 70 and spk.startswith("21") and spk.endswith("ac"):
+                        pubkey_in_tx = spk[2:68]
+                        
+                        # MATCH CHECK
+                        if pubkey_in_tx in target_map:
+                            # WE FOUND A CANDIDATE!
+                            match_obj = target_map[pubkey_in_tx]
+                            
+                            # Verify fully (decrypt whole payload)
+                            success, msg = self.verify_transaction_strict(
+                                txid, match_obj['pw'], match_obj['iv'], match_obj['iv'], match_obj['diff']
+                            )
+
+                            if success:
+                                self._mark_block_verified(match_obj['chain_folder'], match_obj['filename'], txid)
+                                found_updates.append(f"VERIFIED: Block {match_obj['block_index']} in Tx {txid[:8]}")
+        
+        return found_updates
+
+    def _mark_block_verified(self, chain_folder, filename, txid):
+        path = os.path.join(CHAINS_DIR, chain_folder, "blocks", filename)
+        if os.path.exists(path):
+            with open(path, 'r') as f: blk = json.load(f)
+            
+            blk['header']['status'] = "verified"
+            blk['header']['txid'] = txid
+            
+            with open(path, 'w') as f: json.dump(blk, f, indent=4)
 
     # --- BITCOIN RPC & VERIFICATION (REAL) ---
     def get_auth(self):
