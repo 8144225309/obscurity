@@ -1,10 +1,16 @@
 Section 0 above:  WHAT are we doing here, and WHY?
 Section 1 below:  HOW are we doing this?
+Section 2 bottom: How safe is this?
+      Subtitle: Why "Spendable Outputs" and Entropy Recycling make pubkey grinding the most harmless data layer on Bitcoin.
+
+
+
+
 
 
 0.) WHAT are we doing here, and WHY?
 
-# Steganographic Merge Mining // The Efficiency PoC
+# Steganographic Merge Mining // High Efficiency Proof of Concept
 
 > **Subtitle:** A demonstration of cost-neutral inheritance of Bitcoin security via Covert Channel Embedding.
 
@@ -224,3 +230,33 @@ Located in `./chains/[CHAIN_ID]/blocks/`. Stores the metadata required to verify
 5.  **Validation:**
       * **If File Mode:** The result is a 32-byte Hash. The client hashes the local file (`local_storage_path`) and asserts `Local_Hash == OnChain_Hash`.
       * **If Text Mode:** The result is the raw text string.
+
+
+
+
+2.)  How safe is this really?
+Subtitle: Why "Spendable Outputs" and Entropy Recycling make this the most harmless data layer on Bitcoin.
+
+I. The "Spendable" Standard: Solving UTXO Bloat
+
+One of the primary criticisms of data-on-chain protocols (like Ordinals or OP_RETURN) is that they create "Dust"—tiny amounts of Bitcoin that are economically irrational to spend, effectively bloating the UTXO set forever.
+
+Obscurity solves this via Spendable P2PK/P2PKH Outputs:
+
+    The Problem with "Fake" Keys: Many protocols send data to "Burn Addresses" (keys with no known private key). This is permanent bloat; the Bitcoin can never move, and the entry can never be pruned.
+
+    The Obscurity Solution: Our grinder generates valid keypairs. The user retains the Private Key.
+
+    The Result: The data-bearing UTXO is not "dead weight." It is a fully functional financial artifact. It can be consolidated, spent, or swept into a new transaction. To the Bitcoin network, it is indistinguishable from a user moving funds to cold storage. It respects the economic velocity of the chain.
+
+II. The "Sponge": Zero-Impact Entropy Recycling
+
+The most aggressive form of this protocol is the "Piggyback" (or Sponge) method, which utilizes Change Address Regrinding.
+
+    The Waste Stream: In almost every standard Bitcoin transaction, a "Change Output" is generated to return excess funds to the sender. Conventionally, wallets generate a random address for this, consuming block space with random entropy.
+
+    The Sponge: Obscurity replaces this random entropy with deterministic entropy.
+
+    The Efficiency: Instead of creating a new transaction to store data, the software "grinds" the change address of a transaction you were already going to make.
+
+    Conclusion: The data is stored in the "waste heat" of the transaction. It adds zero marginal bytes to the blockchain. We are not occupying new space; we are essentially "recycling" the mandatory change output to carry information harmlessly.
