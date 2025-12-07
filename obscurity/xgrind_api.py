@@ -14,31 +14,85 @@ DEFAULT_DIFFICULTY = 32
 
 class XGrindMiner:
     def __init__(self, binary_path=None, num_workers=DEFAULT_WORKERS, difficulty_bits=DEFAULT_DIFFICULTY):
-        # 1. Smart Path Discovery
-        self.binary_path = self._find_binary(binary_path)
         self.num_workers = num_workers
         self.difficulty_bits = difficulty_bits
         self.chunk_bytes = difficulty_bits // 8
         
-        # Ensure executable permissions
-        subprocess.run(["chmod", "+x", self.binary_path], stderr=subprocess.DEVNULL)
+        # 1. Find the binary (even if it's a Linux file on Windows)
+        self.binary_path = self._find_binary(binary_path)
+        
+        # 2. Determine execution mode
+        self.use_wsl = False
+        if os.name == 'nt':
+            # On Windows, we assume the binary is a Linux executable run via WSL
+            self.use_wsl = True
+            print(f"[INFO] Windows detected. Bridging to WSL to run: {self.binary_path}")
+        else:
+            # On Linux, just ensure it's executable
+            subprocess.run(["chmod", "+x", self.binary_path], stderr=subprocess.DEVNULL)
 
     def _find_binary(self, user_path):
-        if user_path and os.path.exists(user_path): return os.path.abspath(user_path)
-        possible_paths = ["./xgrind_gpu", "./xgrind/xgrind_gpu", "../xgrind/xgrind_gpu", "xgrind_gpu"]
+        # Trust user path if given
+        if user_path and os.path.exists(user_path): 
+            return os.path.abspath(user_path)
+
+        # Standard locations
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(current_dir, "xgrind", "xgrind_gpu"),      # ./xgrind/xgrind_gpu
+            os.path.join(current_dir, "xgrind_gpu"),                # ./xgrind_gpu
+            os.path.join(current_dir, "..", "xgrind", "xgrind_gpu"),# ../xgrind/xgrind_gpu
+            "xgrind_gpu"
+        ]
+
         for p in possible_paths:
-            if os.path.exists(p): return os.path.abspath(p)
-        raise FileNotFoundError(f"Binary 'xgrind_gpu' not found.")
+            if os.path.exists(p): 
+                return p # Return the path even if Windows thinks it's not executable
+        
+        # If we are on Windows, check for .exe too (just in case you actually compiled for Windows)
+        if os.name == 'nt':
+            for p in possible_paths:
+                if os.path.exists(p + ".exe"): return p + ".exe"
+
+        raise FileNotFoundError(f"Binary 'xgrind_gpu' not found. Checked: {possible_paths}")
 
     def _worker_process(self, worker_id, work_queue, result_dict, callback):
         try:
-            # Start persistent C process
+            # Build Command
+            cmd = []
+            if self.use_wsl:
+                # Convert Windows path to WSL friendly relative path if possible, 
+                # or just rely on WSL preserving CWD.
+                # Simplest strategy: Use 'wsl' + 'relative path to binary'
+                # We assume xgrind_api.py is in the same project root as the binary folder
+                
+                # Make path relative to CWD to avoid /mnt/c/... confusion if possible
+                try:
+                    rel_path = os.path.relpath(self.binary_path)
+                    # Force forward slashes for Linux
+                    linux_path = "./" + rel_path.replace("\\", "/")
+                    cmd = ["wsl", linux_path]
+                except:
+                    # Fallback to just passing the filename and hoping it's in path? 
+                    # No, let's try just calling wsl with the absolute path converted
+                    cmd = ["wsl", self.binary_path.replace("\\", "/")]
+            else:
+                cmd = [self.binary_path]
+
+            # Add Arguments
+            cmd.extend(["grind_stream", str(self.difficulty_bits)])
+
+            # Start persistent process
             proc = subprocess.Popen(
-                [self.binary_path, "grind_stream", str(self.difficulty_bits)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1
+                cmd,
+                stdin=subprocess.PIPE, 
+                stdout=subprocess.PIPE, 
+                stderr=sys.stderr, 
+                text=True, 
+                bufsize=1
             )
         except Exception as e:
-            if callback: callback("error", f"Worker {worker_id} failed: {e}")
+            if callback: callback("error", f"Worker {worker_id} failed start: {e}")
             return
 
         while True:
@@ -48,18 +102,19 @@ class XGrindMiner:
                 
                 idx, chunk_data = task
                 
-                # Padding & Formatting
+                # Padding
                 if len(chunk_data) < self.chunk_bytes:
                     chunk_data = chunk_data + b'\x00' * (self.chunk_bytes - len(chunk_data))
+                
                 hex_payload = binascii.hexlify(chunk_data).decode('utf-8')
                 target_hex = hex_payload.ljust(8, '0')
 
-                # Benchmark
+                # Send to GPU
                 start_t = time.time()
                 proc.stdin.write(target_hex + "\n")
                 proc.stdin.flush()
 
-                # Read Result (Blocking)
+                # Read Result
                 line = proc.stdout.readline().strip()
                 duration = time.time() - start_t
                 
@@ -67,8 +122,6 @@ class XGrindMiner:
                     parts = line.split()
                     if len(parts) >= 3:
                         priv, pub, attempts = parts[0], parts[1], int(parts[2])
-                        
-                        # Calculate Hashrate (Guesses per Second)
                         gps = attempts / duration if duration > 0 else 0
                         
                         result_dict[idx] = pub
@@ -92,15 +145,12 @@ class XGrindMiner:
         results = {}
         work_queue = Queue()
         
-        # Calculate chunks
         total_chunks = (len(data_bytes) + self.chunk_bytes - 1) // self.chunk_bytes
         if status_callback: status_callback("info", f"Grinding {len(data_bytes)} bytes ({total_chunks} keys)...")
 
-        # Fill Queue
         for i in range(0, len(data_bytes), self.chunk_bytes):
             work_queue.put((i // self.chunk_bytes, data_bytes[i : i + self.chunk_bytes]))
 
-        # Launch Workers
         threads = []
         for i in range(self.num_workers):
             t = threading.Thread(target=self._worker_process, args=(i, work_queue, results, status_callback))
@@ -110,38 +160,26 @@ class XGrindMiner:
         for _ in range(self.num_workers): work_queue.put(None)
         for t in threads: t.join()
 
-        # Order results
         return [results[i] for i in range(total_chunks) if i in results]
 
 # --- CLI EXECUTION ---
 if __name__ == "__main__":
-    # Namecoin Block #19200
     DEFAULT_HASH = "d8a7c3e01e1e95bcee015e6fcc7583a2ca60b79e5a3aa0a171eddd344ada903d"
-    
     target_hex = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_HASH
     target_hex = target_hex.replace("0x", "").replace(" ", "").strip()
     
-    # Pretty Logger
     def console_logger(msg_type, data):
         if msg_type == "success":
             mkeys = data['gps'] / 1_000_000
-            print(f"[+] Key {data['index']+1} (Worker {data['worker']}): {data['duration']}s | {data['attempts']} guesses | Speed: {mkeys:.2f} M/s")
-        elif msg_type == "info":
-            print(f"[*] {data}")
+            print(f"[+] Key {data['index']+1} (Worker {data['worker']}): {data['duration']}s | Speed: {mkeys:.2f} M/s")
         elif msg_type == "error":
             print(f"[!] {data}")
 
-    print(f"--- XGRIND 4090 NITRO DRIVER ---")
-    print(f"Target: {target_hex[:16]}...")
-    print(f"Config: 4 Workers | 32 Bits | Auto-Balancing")
-    print("="*60)
-    
-    miner = XGrindMiner()
-    start = time.time()
-    keys = miner.grind(binascii.unhexlify(target_hex), console_logger)
-    total = time.time() - start
-    
-    print("="*60)
-    print(f"[*] DONE in {total:.2f} seconds")
-    print("="*60)
-    print(json.dumps(keys, indent=2))
+    print(f"--- XGRIND API DRIVER ---")
+    try:
+        miner = XGrindMiner()
+        print(f"[*] Binary Found: {miner.binary_path}")
+        print(f"[*] Mode: {'WSL Bridge' if miner.use_wsl else 'Native'}")
+        miner.grind(binascii.unhexlify(target_hex), console_logger)
+    except Exception as e:
+        print(f"[FATAL] {e}")

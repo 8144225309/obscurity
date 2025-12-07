@@ -20,7 +20,7 @@ except ImportError:
 DATA_DIR = "obscurity_data"
 CHAINS_DIR = os.path.join(DATA_DIR, "chains")
 KEYSTORE_DIR = os.path.join(DATA_DIR, "keystore")
-LOCKBOX_DIR = os.path.join(DATA_DIR, "lockboxes") # NEW: Portable artifacts
+LOCKBOX_DIR = os.path.join(DATA_DIR, "lockboxes") 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
 class DataManager:
@@ -28,7 +28,7 @@ class DataManager:
         self.ensure_directories()
         self.config = self.load_config()
         
-        # Initialize Miner (4 Workers for RTX 4090)
+        # Initialize Miner (Default 4 Workers for RTX 4090)
         self.miner = None
         self.miner_available = False
         if XGrindMiner:
@@ -61,42 +61,24 @@ class DataManager:
 
     # --- ENCRYPTION ENGINE (AES-256-GCM) ---
     def _derive_key(self, password_str):
-        """
-        Derives a 256-bit AES key from a password string.
-        SHA256 is used as a simple KDF for this hackathon demo.
-        """
         return hashlib.sha256(password_str.encode()).digest()
 
     def encrypt_data(self, password, raw_bytes):
-        """
-        Encrypts data using AES-GCM.
-        Returns: (ciphertext_hex, nonce_hex, tag_hex)
-        """
         key = self._derive_key(password)
         aesgcm = AESGCM(key)
-        nonce = secrets.token_bytes(12) # Standard 96-bit nonce
-        
-        # Encrypt (GCM includes auth tag in the output)
+        nonce = secrets.token_bytes(12) 
         ciphertext_with_tag = aesgcm.encrypt(nonce, raw_bytes, None)
-        
-        # Split tag (last 16 bytes)
         tag = ciphertext_with_tag[-16:]
         ciphertext = ciphertext_with_tag[:-16]
-        
         return ciphertext.hex(), nonce.hex(), tag.hex()
 
     def decrypt_data(self, password, ciphertext_hex, nonce_hex, tag_hex):
-        """
-        Decrypts data using AES-GCM. Verifies integrity automatically.
-        """
         try:
             key = self._derive_key(password)
             aesgcm = AESGCM(key)
-            
             nonce = bytes.fromhex(nonce_hex)
             ciphertext = bytes.fromhex(ciphertext_hex)
             tag = bytes.fromhex(tag_hex)
-            
             data = aesgcm.decrypt(nonce, ciphertext + tag, None)
             return data
         except Exception as e:
@@ -119,63 +101,35 @@ class DataManager:
         return chains
 
     def create_anchor(self, name):
-        """
-        Creates a new Anchor. 
-        Does NOT create the Genesis block file yet. The UI must do that via commit_block.
-        """
         chain_id = str(uuid.uuid4())[:8]
         safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '_', '-')]).strip()
         folder_name = f"{safe_name}_{chain_id}"
         chain_path = os.path.join(CHAINS_DIR, folder_name)
         os.makedirs(os.path.join(chain_path, "blocks"))
-        
-        meta = {
-            "name": name, 
-            "id": chain_id, 
-            "type": "anchor",
-            "created_at": time.time()
-        }
+        meta = {"name": name, "id": chain_id, "type": "anchor", "created_at": time.time()}
         with open(os.path.join(chain_path, "chain_meta.json"), "w") as f:
             json.dump(meta, f, indent=4)
-
         return folder_name
 
     def fork_chain(self, source_chain_folder, target_block_index, new_name):
-        """
-        Creates a FORK of an existing chain up to target_block_index.
-        """
         new_chain_id = str(uuid.uuid4())[:8]
         safe_name = "".join([c for c in new_name if c.isalnum() or c in (' ', '_', '-')]).strip()
         new_folder_name = f"{safe_name}_{new_chain_id}"
         new_chain_path = os.path.join(CHAINS_DIR, new_folder_name)
-        
         os.makedirs(os.path.join(new_chain_path, "blocks"))
-
-        # Copy History
+        
         source_blocks_dir = os.path.join(CHAINS_DIR, source_chain_folder, "blocks")
         for fname in sorted(os.listdir(source_blocks_dir)):
             if fname.endswith(".json"):
                 try:
                     idx = int(fname.split("_")[0])
                     if idx <= target_block_index:
-                        shutil.copy2(
-                            os.path.join(source_blocks_dir, fname),
-                            os.path.join(new_chain_path, "blocks", fname)
-                        )
+                        shutil.copy2(os.path.join(source_blocks_dir, fname), os.path.join(new_chain_path, "blocks", fname))
                 except: continue
 
-        # Create Meta
-        meta = {
-            "name": new_name,
-            "id": new_chain_id,
-            "type": "fork",
-            "parent_chain": source_chain_folder,
-            "fork_index": target_block_index,
-            "created_at": time.time()
-        }
+        meta = {"name": new_name, "id": new_chain_id, "type": "fork", "parent_chain": source_chain_folder, "fork_index": target_block_index, "created_at": time.time()}
         with open(os.path.join(new_chain_path, "chain_meta.json"), "w") as f:
             json.dump(meta, f, indent=4)
-            
         return new_folder_name
 
     def load_blocks(self, chain_folder):
@@ -189,26 +143,16 @@ class DataManager:
 
     # --- BLOCK FACTORY ---
     def commit_block(self, chain_folder, index, prev_hash, data_bytes, filename="data.bin"):
-        """
-        Encrypts data, generates hash, and saves the block file to disk.
-        """
         chain_id = chain_folder.split('_')[-1]
-        
-        # 1. Calculate Content Hash (SHA256 of plaintext)
         content_hash = hashlib.sha256(data_bytes).hexdigest()
-        
-        # 2. Encrypt Payload (AES-256-GCM)
-        # We use the chain_id as the password for simplicity in this demo
         cipher_hex, nonce_hex, tag_hex = self.encrypt_data(chain_id, data_bytes)
         
-        # 3. Block ID Hash (Merkle Commitment)
         hasher = hashlib.sha256()
         hasher.update(str(index).encode())
         hasher.update(str(prev_hash).encode())
         hasher.update(bytes.fromhex(cipher_hex)) 
         block_hash = hasher.hexdigest()
 
-        # 4. Construct Block
         is_anchor = (index == 0)
         block_data = {
             "header": {
@@ -232,7 +176,7 @@ class DataManager:
                 "ciphertext_hex": cipher_hex,
                 "nonce_hex": nonce_hex,
                 "tag_hex": tag_hex,
-                "key_used": chain_id # Storing the "password" hint
+                "key_used": chain_id
             },
             "steganography": {
                 "engine": "xgrind_4090",
@@ -248,14 +192,14 @@ class DataManager:
         return block_data
 
     # --- GRINDER EXECUTION ---
-    def run_grinder(self, chain_folder, block_index, difficulty_bits, progress_callback):
+    def run_grinder(self, chain_folder, block_index, difficulty_bits, num_workers, progress_callback):
         """
         Grinds keys and generates the .lockbox artifact.
+        Now accepts 'num_workers' to tune 4090 usage.
         """
         if not self.miner_available:
             return False, "Miner binary missing."
 
-        # 1. Load Target Block
         blocks_dir = os.path.join(CHAINS_DIR, chain_folder, "blocks")
         target_block = None
         target_fname = None
@@ -269,13 +213,10 @@ class DataManager:
         
         if not target_block: return False, "Block not found"
 
-        # 2. Extract Payload
         cipher_hex = target_block.get("encryption", {}).get("ciphertext_hex", "")
         if not cipher_hex: return False, "No encrypted payload found."
         
         full_payload = bytes.fromhex(cipher_hex)
-        
-        # 3. Callback Bridge
         chunk_bytes = difficulty_bits // 8
         total_keys = math.ceil(len(full_payload) / chunk_bytes)
         
@@ -288,7 +229,8 @@ class DataManager:
             elif msg_type == "error":
                 print(f"[API Error] {data}")
 
-        # 4. EXECUTE
+        # UPDATE MINER SETTINGS DYNAMICALLY
+        self.miner.num_workers = num_workers
         self.miner.difficulty_bits = difficulty_bits
         self.miner.chunk_bytes = chunk_bytes
 
@@ -298,7 +240,6 @@ class DataManager:
             if not final_keys or None in final_keys:
                 return False, "Grinding incomplete."
 
-            # 5. Save State
             target_block['steganography']['status'] = "complete"
             target_block['steganography']['difficulty_bits'] = difficulty_bits
             target_block['steganography']['total_chunks'] = len(final_keys)
@@ -308,7 +249,6 @@ class DataManager:
             with open(os.path.join(blocks_dir, target_fname), "w") as f:
                 json.dump(target_block, f, indent=4)
 
-            # 6. GENERATE LOCKBOX (The Portable Artifact)
             lockbox = {
                 "version": 1,
                 "chain_id": chain_folder.split('_')[-1],
@@ -340,46 +280,29 @@ class DataManager:
         except Exception as e: return {"error": str(e)}
 
     def verify_transaction_strict(self, txid, password, iv_hex, salt_tag_hex, difficulty_bits):
-        """
-        Strict 1:1 Verification against a real Bitcoin Node.
-        """
-        # 1. Fetch Tx
         res = self.rpc_call("getrawtransaction", [txid, True])
-        if res.get('error'):
-            return False, f"RPC Error: {res['error']}"
-        
+        if res.get('error'): return False, f"RPC Error: {res['error']}"
         tx = res.get('result')
         if not tx: return False, "Transaction not found on node."
 
-        # 2. Extract Keys
         chunk_bytes = difficulty_bits // 8
         reconstructed_cipher = b""
         logs = [f"Checking TXID: {txid[:8]}..."]
         
         for vout in tx.get('vout', []):
             hex_spk = vout['scriptPubKey'].get('hex', '')
-            # P2PK: 21<33_bytes_pubkey>ac
             if len(hex_spk) == 70 and hex_spk.startswith("21") and hex_spk.endswith("ac"):
                 pubkey = hex_spk[2:68] 
                 payload_chunk = pubkey[2 : 2 + (chunk_bytes * 2)] 
                 reconstructed_cipher += bytes.fromhex(payload_chunk)
                 logs.append(f"Out #{vout['n']}: {payload_chunk}")
 
-        if not reconstructed_cipher:
-            return False, "No P2PK outputs found in transaction."
+        if not reconstructed_cipher: return False, "No P2PK outputs found."
 
-        # 3. Decrypt with STRICT parameters
         logs.append(f"Reconstructed {len(reconstructed_cipher)} bytes.")
-        logs.append(f"Attempting decrypt with provided Password & IV...")
-        
-        decrypted_data = self.decrypt_data(
-            password, 
-            reconstructed_cipher.hex(), 
-            iv_hex, 
-            salt_tag_hex
-        )
+        decrypted_data = self.decrypt_data(password, reconstructed_cipher.hex(), iv_hex, salt_tag_hex)
 
         if decrypted_data:
             return True, "\n".join(logs) + "\n\n[SUCCESS] DECRYPTION CONFIRMED.\nThe data on the blockchain matches your keys exactly."
         else:
-            return False, "\n".join(logs) + "\n\n[FAIL] Decryption Failed.\nThe data on-chain does not match the provided Password/Salt."
+            return False, "\n".join(logs) + "\n\n[FAIL] Decryption Failed.\nData mismatch or wrong password."
