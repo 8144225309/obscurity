@@ -1,0 +1,10 @@
+{
+    "index": 1,
+    "is_anchor": false,
+    "block_hash": "545b1d128c20856525401f25fac2a75cfdcf7672d3ee27c6462b9978247d5cac",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "payload": "Empty Payload",
+    "status": "unlinked",
+    "txid": null,
+    "grind_data": []
+}

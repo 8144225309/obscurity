@@ -1,0 +1,11 @@
+{
+    "index": 0,
+    "is_anchor": true,
+    "block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "prev_hash": null,
+    "payload": {
+        "type": "text",
+        "data": "Genesis Anchor"
+    },
+    "status": "unlinked"
+}
