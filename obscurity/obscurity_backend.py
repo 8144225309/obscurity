@@ -27,7 +27,6 @@ class DataManager:
                     f.write("Obscurity Key Storage.\nWARNING: Handle with care.\n")
 
         if not os.path.exists(CONFIG_FILE):
-            # SAFE AUTO-DETECTION: Uses system variables, no hardcoded names
             if os.name == 'nt':
                 default_data = os.path.join(os.getenv('APPDATA'), "Bitcoin")
             else:
@@ -36,7 +35,7 @@ class DataManager:
             default_config = {
                 "rpc_host": "127.0.0.1",
                 "rpc_port": 8332,
-                "rpc_user": "",     # Empty = try cookie auth
+                "rpc_user": "",
                 "rpc_pass": "",
                 "data_dir": default_data,
                 "zmq_host": "127.0.0.1",
@@ -50,7 +49,6 @@ class DataManager:
             return json.load(f)
 
     def save_config(self, new_conf):
-        # Update in-memory and on-disk
         self.config.update(new_conf)
         with open(CONFIG_FILE, 'w') as f:
             json.dump(self.config, f, indent=4)
@@ -76,6 +74,24 @@ class DataManager:
         # Create Anchor (Index 0)
         self.create_block(folder_name, 0, None, "Genesis Anchor", is_anchor=True)
         return folder_name
+
+    def create_example_chains(self):
+        """Generates a demo chain with history for showcase."""
+        name = "Demo_Chain_Alpha"
+        folder = self.create_new_chain(name)
+        
+        # Block 1: Data
+        b0 = self.load_blocks(folder)[0]
+        self.create_block(folder, 1, b0['block_hash'], "Hello Hackathon Judges!", is_anchor=False)
+        
+        # Block 2: Image Payload (Simulated)
+        b1 = self.load_blocks(folder)[1]
+        b2 = self.create_block(folder, 2, b1['block_hash'], "<Image Data Hex>", is_anchor=False)
+        
+        # Set Block 0 to Verified (Simulated)
+        self.update_block_status(folder, 0, txid="a1b2c3d4e5...", status="verified")
+        
+        return folder
 
     def create_block(self, chain_folder, index, prev_hash, payload_data, is_anchor=False):
         hasher = hashlib.sha256()
@@ -128,17 +144,12 @@ class DataManager:
 
     # --- BITCOIN RPC LOGIC ---
     def get_auth(self):
-        """Resolves user/pass or reads cookie file."""
         user = self.config.get('rpc_user', '')
         passwd = self.config.get('rpc_pass', '')
+        if user and passwd: return (user, passwd)
         
-        if user and passwd:
-            return (user, passwd)
-        
-        # Try cookie from the configured data_dir
         datadir = self.config.get('data_dir', '')
         cookie_path = os.path.join(datadir, ".cookie")
-        
         if os.path.exists(cookie_path):
             try:
                 with open(cookie_path, 'r') as f:
@@ -146,22 +157,14 @@ class DataManager:
                 if ':' in cookie_str:
                     u, p = cookie_str.split(':', 1)
                     return (u, p)
-            except:
-                pass
+            except: pass
         return None
 
     def rpc_call(self, method, params=[]):
         url = f"http://{self.config['rpc_host']}:{self.config['rpc_port']}"
         headers = {'content-type': 'application/json'}
-        payload = {
-            "method": method,
-            "params": params,
-            "jsonrpc": "2.0",
-            "id": 0,
-        }
-        
+        payload = {"method": method, "params": params, "jsonrpc": "2.0", "id": 0}
         auth = self.get_auth()
-        
         try:
             response = requests.post(url, data=json.dumps(payload), headers=headers, auth=auth, timeout=5)
             return response.json()
@@ -170,12 +173,11 @@ class DataManager:
 
     def test_rpc_connection(self):
         res = self.rpc_call("getblockchaininfo", [])
-        if 'error' in res and res['error']:
-            return False, f"RPC Error: {res['error']}"
+        if 'error' in res and res['error']: return False, f"RPC Error: {res['error']}"
         if 'result' in res:
             info = res['result']
             return True, f"Connected! Chain: {info.get('chain')}, Blocks: {info.get('blocks')}"
-        return False, "Unknown connection error (Check host/port/auth)"
+        return False, "Unknown connection error"
 
     def verify_on_chain(self, txid, expected_hash):
         res = self.rpc_call("getrawtransaction", [txid, True])
@@ -187,11 +189,9 @@ class DataManager:
         extracted_bits = ""
         logs = []
         
-        # Extract P2PK
         for vout in tx.get('vout', []):
             spk = vout['scriptPubKey']
             hex_spk = spk.get('hex', '')
-            
             if len(hex_spk) == 70 and hex_spk.startswith("21") and hex_spk.endswith("ac"):
                 pubkey = hex_spk[2:68]
                 payload_chunk = pubkey[2:10]
