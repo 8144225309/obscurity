@@ -331,7 +331,7 @@ __device__ void _ModAdd256(uint64_t *r, uint64_t *a, uint64_t *b)
     UADDC(rr[1], a[1], b[1]);
     UADDC(rr[2], a[2], b[2]);
     UADDC(rr[3], a[3], b[3]);
-    UADD(rr[4], 0ULL, 0ULL);;
+    UADD(rr[4], 0UL, 0UL);
 
     Load256(r, rr);
 
