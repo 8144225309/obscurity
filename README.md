@@ -260,3 +260,8 @@ The most aggressive form of this protocol is the "Piggyback" (or Sponge) method,
     The Efficiency: Instead of creating a new transaction to store data, the software "grinds" the change address of a transaction you were already going to make.
 
     Conclusion: The data is stored in the "waste heat" of the transaction. It adds zero marginal bytes to the blockchain. We are not occupying new space; we are essentially "recycling" the mandatory change output to carry information harmlessly.
+
+
+
+
+    Special Thanks to BitcoinGrove and plebfi Miami hackathon December 6-7th 2025
