@@ -1,0 +1,10 @@
+# local data / test chains
+obscurity_data/
+keygrinder/
+
+# editor backups / copies
+obscurity_modern - Copy.py
+
+# Python junk
+__pycache__/
+*.pyc
