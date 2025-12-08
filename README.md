@@ -1,5 +1,7 @@
 Section 0 above:  WHAT are we doing here, and WHY?
+
 Section 1 below:  HOW are we doing this?
+
 Section 2 bottom: How safe is this?
       Subtitle: Why "Spendable Outputs" and Entropy Recycling make pubkey grinding the most harmless data layer on Bitcoin.
 
